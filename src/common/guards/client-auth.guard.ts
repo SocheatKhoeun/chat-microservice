@@ -1,8 +1,12 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { Request } from 'express';
 import { PrismaService } from '../../core/services/prisma/prisma.service';
-
 
 @Injectable()
 export class ClientAuthGuard implements CanActivate {
@@ -49,8 +53,7 @@ export class ClientAuthGuard implements CanActivate {
   private parseBasicAuth(
     authorization?: string,
   ): { clientId: string; clientSecret: string } | null {
-    if (!authorization?.startsWith('Basic '))
-      return null;
+    if (!authorization?.startsWith('Basic ')) return null;
 
     const decoded = Buffer.from(authorization.slice(6), 'base64').toString(
       'utf8',

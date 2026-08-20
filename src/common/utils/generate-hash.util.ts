@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 
-const ALPHANUMERIC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const ALPHANUMERIC =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 export function generateHash(length = 16): string {
   let result = '';

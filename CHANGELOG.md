@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.0.2] - 2026-08-06
+
+### Added
+- Core chat feature: 1:1 messaging, scoped per integration (`oauth_clients`), keyed by external
+  user ids owned by the calling project (no local `users` table).
+  - `conversations` / `messages` tables — `db/schema/conversations.ts`, `db/schema/messages.ts`
+    (Drizzle, migration source of truth) mirrored in `prisma/schema.prisma` (query layer).
+    `conversations` is unique on `(client_id, participant_one_id, participant_two_id)` with
+    participant ids always stored in sorted order, so a pair of users maps to exactly one
+    conversation regardless of call order.
+  - `ChatModule` (`src/modules/chat/`) — `ChatController` + `ChatService`, guarded by the
+    existing `ClientAuthGuard`, under `POST/GET /api/v1/chat/conversations`:
+    - `POST /chat/conversations` — get-or-create the 1:1 conversation for two participant ids.
+    - `GET /chat/conversations` — list a participant's conversations, newest activity first,
+      each with its last message and unread count.
+    - `GET /chat/conversations/:id` — fetch one conversation (403 if the caller isn't a
+      participant, 404 if it belongs to a different integration).
+    - `POST /chat/conversations/:id/messages` — send a message.
+    - `GET /chat/conversations/:id/messages` — cursor-paginated message history.
+    - `POST /chat/conversations/:id/read` — mark read up to now, per participant.
+  - `CurrentClient` param decorator (`src/common/decorators/current-client.decorator.ts`) —
+    reads the authenticated integration off `request.client`.
+- `drizzle/0001_add_chat_tables.sql`, `drizzle/0002_fix_conversation_nullable_timestamps.sql`.
+
+### Changed
+- `ClientAuthGuard` now attaches the authenticated `oauth_clients` row to `request.client` (was
+  previously discarded after the credentials check), so downstream handlers can scope queries to
+  the calling integration via `@CurrentClient()`.
+
+### Fixed
+- `RangeError: Invalid time value` on every read that touched the new nullable timestamp columns
+  (`participant_one_read_at`, `participant_two_read_at`, `last_message_at`). Cause: this
+  database has `explicit_defaults_for_timestamp` off, so a defaultless nullable MySQL/MariaDB
+  `timestamp` column silently becomes `NOT NULL DEFAULT '0000-00-00 00:00:00'` (or
+  `CURRENT_TIMESTAMP` for the first such column in the table) instead of staying nullable —
+  `@prisma/adapter-mariadb` then fails parsing that value back into a `Date`. Switched those
+  three columns to `datetime`, which isn't subject to that legacy behavior. Any *future*
+  nullable timestamp column added to this schema needs the same treatment.
+- `PrismaService.onApplicationShutdown` / `SettingService` — removed two pre-existing unused
+  symbols (`signal` param, `InternalServerErrorException` import) that were failing `pnpm lint`.
+- `src/main.ts` — `bootstrap()` call wasn't awaited/handled, tripping
+  `@typescript-eslint/no-floating-promises`; wrapped with `void`.
+
 ## [Unreleased]
 
 ### Added

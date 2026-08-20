@@ -1,4 +1,8 @@
-import { Injectable, OnModuleInit, OnApplicationShutdown } from '@nestjs/common';
+import {
+  Injectable,
+  OnModuleInit,
+  OnApplicationShutdown,
+} from '@nestjs/common';
 import { PrismaClient } from '../../../../generated/prisma/client';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 
@@ -15,7 +19,7 @@ export class PrismaService
     await this.$connect();
   }
 
-  async onApplicationShutdown(signal?: string) {
+  async onApplicationShutdown() {
     await this.$disconnect();
   }
 }

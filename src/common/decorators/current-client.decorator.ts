@@ -9,7 +9,9 @@ import { oauth_clients } from '../../../generated/prisma/client';
  */
 export const CurrentClient = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): oauth_clients => {
-    const request = ctx.switchToHttp().getRequest<Request & { client: oauth_clients }>();
+    const request = ctx
+      .switchToHttp()
+      .getRequest<Request & { client: oauth_clients }>();
     return request.client;
   },
 );

@@ -29,49 +29,7 @@ model oauth_clients {
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
-  conversations conversations[]
-
   @@map("oauth_clients")
-}
-
-model conversations {
-  id                       Int       @id @default(autoincrement())
-  // owning integration (the calling project), so data from different
-  // consumers of this microservice never mixes
-  client_id                Int
-  // external user ids, owned by the calling project — always stored with
-  // participant_one_id < participant_two_id so a pair only ever maps to
-  // one conversation regardless of call order
-  participant_one_id       String    @db.VarChar(191)
-  participant_two_id       String    @db.VarChar(191)
-  participant_one_read_at  DateTime? @db.Timestamp(0)
-  participant_two_read_at  DateTime? @db.Timestamp(0)
-  last_message_at          DateTime? @db.Timestamp(0)
-  created_at               DateTime  @default(now()) @db.Timestamp(0)
-  updated_at               DateTime  @default(now()) @updatedAt @db.Timestamp(0)
-
-  client   oauth_clients @relation(fields: [client_id], references: [id])
-  messages messages[]
-
-  @@unique([client_id, participant_one_id, participant_two_id])
-  @@index([client_id, participant_one_id])
-  @@index([client_id, participant_two_id])
-  @@map("conversations")
-}
-
-model messages {
-  id              Int      @id @default(autoincrement())
-  conversation_id Int
-  // external user id of whoever sent the message
-  sender_id       String   @db.VarChar(191)
-  body            String   @db.Text
-  created_at      DateTime @default(now()) @db.Timestamp(0)
-  updated_at      DateTime @default(now()) @updatedAt @db.Timestamp(0)
-
-  conversation conversations @relation(fields: [conversation_id], references: [id])
-
-  @@index([conversation_id, created_at])
-  @@map("messages")
 }
 
 model oauth_client_grant_types {
@@ -82,4 +40,100 @@ model oauth_client_grant_types {
   updated_at  DateTime @updatedAt
 
   @@map("oauth_client_grant_types")
+}
+
+model users {
+  id                  Int              @id @default(autoincrement())
+  external_id         String?          @unique @db.VarChar(255)
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @default(now()) @updatedAt
+
+  @@map("users")
+}
+
+model conversations {
+  id                  Int              @id @default(autoincrement())
+  hash                String           @unique
+  type                conversation_type?
+  name                String?          @db.VarChar(255)
+  description         String?          @db.VarChar(255)
+  avatar_url          String?          @db.VarChar(255)
+  created_by          String?          @db.VarChar(255)
+
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @default(now()) @updatedAt
+
+  @@map("conversations")
+}
+
+model conversation_members {
+  id                  Int                     @id @default(autoincrement())
+  conversation_id     Int
+  user_id             Int
+  nickname            String?                 @db.VarChar(255)
+  role                conversation_member_role?
+  joined_at           DateTime                @default(now())
+  left_at             DateTime?
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("conversation_members")
+}
+
+model messages {
+  id                  Int                     @id @default(autoincrement())
+  hash                String?                 @unique
+  conversation_id     Int
+  sender_id           Int
+  type                message_type?
+  content             String?                 @db.Text
+  replied_message_id  Int?
+  attachment_url      String?                 @db.VarChar(255)
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("messages")
+}
+
+model message_reactions {
+  id                  Int                     @id @default(autoincrement())
+  hash                String?                 @unique
+  message_id          Int
+  user_id             Int
+  reaction            String                  @db.VarChar(255)
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("message_reactions")
+}
+
+model message_reads {
+  id                  Int                     @id @default(autoincrement())
+  message_id          Int
+  user_id             Int
+  read_at             DateTime                @default(now())
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("message_reads")
+}
+
+enum conversation_type {
+  direct
+  group
+}
+
+enum conversation_member_role {
+  owner
+  admin
+  member
+}
+
+enum message_type {
+  text
+  image
+  video
+  audio
+  file
+  system
 }

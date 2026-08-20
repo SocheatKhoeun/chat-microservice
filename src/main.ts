@@ -8,11 +8,11 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
 
-  app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, transform: true }),
-  );
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
-  const allowedOrigins = process.env.ALLOW_CORS?.split(',').map((origin) => origin.trim());
+  const allowedOrigins = process.env.ALLOW_CORS?.split(',').map((origin) =>
+    origin.trim(),
+  );
   app.enableCors({
     origin: allowedOrigins?.includes('*') ? true : allowedOrigins,
   });
@@ -21,10 +21,7 @@ async function bootstrap() {
     const config = new DocumentBuilder()
       .setTitle('API Documentation')
       .setVersion('1.0')
-      .addBasicAuth(
-        { type: 'http', scheme: 'basic' },
-        'client-credentials',
-      )
+      .addBasicAuth({ type: 'http', scheme: 'basic' }, 'client-credentials')
       .build();
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('swagger', app, document);
@@ -34,7 +31,7 @@ async function bootstrap() {
   console.log('\n----------------------------------------------');
   console.log(`Application is running on port: ${process.env.PORT ?? 3000}`);
   console.log(`UTC Time: ${new Date().toLocaleString('en-US', { timeZone: 'UTC' })}`);
-  console.log(`Cambodia Time: ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Phnom_Penh' })}`);
   console.log('----------------------------------------------');
 }
-bootstrap();
+
+void bootstrap();
