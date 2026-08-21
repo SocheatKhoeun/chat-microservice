@@ -1,27 +1,34 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix('api');
 
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  app.useGlobalPipes(new ValidationPipe({ transform: true }));
 
-  const allowedOrigins = process.env.ALLOW_CORS?.split(',').map((origin) =>
-    origin.trim(),
-  );
+  // Enable CORS
+  const allowedOrigins = (process.env.ALLOW_CORS ?? 'http://localhost:5000')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: allowedOrigins?.includes('*') ? true : allowedOrigins,
+    origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
   });
 
+  // Only expose Swagger in non-production
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
-      .setTitle('API Documentation')
+      .setTitle('Chat Service API')
+      .setDescription('API documentation')
       .setVersion('1.0')
-      .addBasicAuth({ type: 'http', scheme: 'basic' }, 'client-credentials')
+      .addBearerAuth()
+      .addBasicAuth()
       .build();
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('swagger', app, document);
@@ -31,7 +38,8 @@ async function bootstrap() {
   console.log('\n----------------------------------------------');
   console.log(`Application is running on port: ${process.env.PORT ?? 3000}`);
   console.log(`UTC Time: ${new Date().toLocaleString('en-US', { timeZone: 'UTC' })}`);
+  console.log(`Cambodia Time: ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Phnom_Penh' })}`);
   console.log('----------------------------------------------');
-}
 
-void bootstrap();
+}
+bootstrap();

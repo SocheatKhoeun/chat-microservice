@@ -1,22 +1,22 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class SettingService {
   constructor(private readonly prismaService: PrismaService) {}
 
-  // async getSecret() {
-  //   const option = await this.prismaService.settings.findUnique({
-  //     where: { key: 'key_secret' },
-  //   });
+  async getSecret() {
+    const option = await this.prismaService.settings.findUnique({
+      where: { key: 'key_secret' },
+    });
 
-  //   if (!option?.value)
-  //     throw new InternalServerErrorException(
-  //       'No jwt secret available!||មិនមាន JWT សម្ងាត់ទេ!',
-  //     );
+    if (!option?.value)
+      throw new InternalServerErrorException(
+        'No jwt secret available!||មិនមាន JWT សម្ងាត់ទេ!',
+      );
 
-  //   return option.value;
-  // }
+    return option.value;
+  }
 
   // async getSessionDuration() {
   //   const option = await this.prismaService.settings.findUnique({
