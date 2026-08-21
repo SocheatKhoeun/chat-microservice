@@ -45,6 +45,7 @@ model oauth_client_grant_types {
 model users {
   id                  Int              @id @default(autoincrement())
   external_id         String?          @unique @db.VarChar(255)
+
   created_at          DateTime         @default(now())
   updated_at          DateTime         @default(now()) @updatedAt
 
@@ -58,7 +59,7 @@ model conversations {
   name                String?          @db.VarChar(255)
   description         String?          @db.VarChar(255)
   avatar_url          String?          @db.VarChar(255)
-  created_by          String?          @db.VarChar(255)
+  created_by          Int?
 
   created_at          DateTime         @default(now())
   updated_at          DateTime         @default(now()) @updatedAt
@@ -74,6 +75,7 @@ model conversation_members {
   role                conversation_member_role?
   joined_at           DateTime                @default(now())
   left_at             DateTime?
+
   created_at          DateTime                @default(now())
   updated_at          DateTime                @default(now()) @updatedAt
 
@@ -88,7 +90,7 @@ model messages {
   type                message_type?
   content             String?                 @db.Text
   replied_message_id  Int?
-  attachment_url      String?                 @db.VarChar(255)
+
   created_at          DateTime                @default(now())
   updated_at          DateTime                @default(now()) @updatedAt
 
@@ -112,10 +114,54 @@ model message_reads {
   message_id          Int
   user_id             Int
   read_at             DateTime                @default(now())
+
   created_at          DateTime                @default(now())
   updated_at          DateTime                @default(now()) @updatedAt
 
   @@map("message_reads")
+}
+
+model message_attachments {
+  id                  Int                     @id @default(autoincrement())
+  message_id          Int
+  file_url            String                  @db.VarChar(255)
+  file_type           String                  @db.VarChar(255)
+
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("message_attachments")
+}
+
+model calls {
+  id                  Int                     @id @default(autoincrement())
+  hash                String?                 @unique
+  conversation_id     Int
+  caller_id           Int
+  type                call_type?
+  status              call_status?
+  started_at          DateTime?
+  answered_at         DateTime?
+  ended_at            DateTime?
+
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("calls")
+}
+
+model call_participants {
+  id                  Int                     @id @default(autoincrement())
+  call_id             Int
+  user_id             Int
+  joined_at           DateTime                @default(now())
+  left_at             DateTime?
+  status              call_participant_status?
+  
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @default(now()) @updatedAt
+
+  @@map("call_participants")
 }
 
 enum conversation_type {
@@ -136,4 +182,34 @@ enum message_type {
   audio
   file
   system
+}
+
+enum attachment_type {
+  image
+  video
+  audio
+  file
+}
+
+enum call_type {
+  audio
+  video
+}
+
+enum call_status {
+  ringing
+  active
+  ended
+  missed
+  rejected
+  cancelled
+}
+
+enum call_participant_status {
+  invited
+  ringing
+  joined
+  left
+  rejected
+  missed
 }
