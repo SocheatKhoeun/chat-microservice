@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../core/services/prisma/prisma.service';
+import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
 import { conversation_type, message_type } from '../../../generated/prisma/enums';
 import {
@@ -12,7 +13,10 @@ import { RepliedMessageDto } from '../messages/messages.model';
 
 @Injectable()
 export class ConversationsService {
-  constructor(private readonly prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly chatEventsService: ChatEventsService,
+  ) {}
 
   async startDirectConversation(
     currentUserId: string,
@@ -83,7 +87,7 @@ export class ConversationsService {
       },
     );
 
-    return {
+    const response: ConversationResponseDto = {
       id: conversation.id,
       hash: conversation.hash,
       type: conversation.type,
@@ -92,6 +96,15 @@ export class ConversationsService {
       created_at: conversation.created_at,
       updated_at: conversation.updated_at,
     };
+
+    // Notify the other member over WebSocket even if they've never joined this
+    // conversation's room — they can't have, if it didn't exist a moment ago.
+    this.chatEventsService.notifyUser(targetUserId, 'conversation_started', {
+      ...response,
+      sender_id: currentUserId,
+    });
+
+    return response;
   }
 
   async listConversations(
@@ -149,6 +162,36 @@ export class ConversationsService {
       items.length === limit ? items[items.length - 1].id : null;
 
     return { data: items, next_cursor };
+  }
+
+  async listMemberUserIds(conversationHash: string): Promise<string[]> {
+    const conversation = await this.prismaService.conversations.findUnique({
+      where: { hash: conversationHash },
+      include: { members: true },
+    });
+
+    return (
+      conversation?.members
+        .filter((member) => !member.left_at)
+        .map((member) => member.user_id) ?? []
+    );
+  }
+
+  /** Every other user this person shares at least one active conversation with — who presence changes go to. */
+  async listContactUserIds(userId: string): Promise<string[]> {
+    const contacts = await this.prismaService.conversation_members.findMany({
+      where: {
+        left_at: null,
+        user_id: { not: userId },
+        conversation: {
+          members: { some: { user_id: userId, left_at: null } },
+        },
+      },
+      select: { user_id: true },
+      distinct: ['user_id'],
+    });
+
+    return contacts.map((member) => member.user_id);
   }
 
   async assertMembership(conversationHash: string, userId: string) {

@@ -11,5 +11,6 @@ import { MessagesService } from './messages.service';
   imports: [JwtModule.register({}), ConversationsModule],
   controllers: [MessagesController],
   providers: [MessagesService, PrismaService, SettingService, OauthJwtGuard],
+  exports: [MessagesService],
 })
 export class MessagesModule {}

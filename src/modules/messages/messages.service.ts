@@ -61,6 +61,41 @@ export class MessagesService {
     };
   }
 
+  async markConversationRead(currentUserId: string, conversationHash: string) {
+    const conversation = await this.conversationsService.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+
+    const unreadMessages = await this.prismaService.messages.findMany({
+      where: {
+        conversation_id: conversation.id,
+        sender_id: { not: currentUserId },
+        reads: { none: { user_id: currentUserId } },
+      },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+
+    if (unreadMessages.length > 0) {
+      await this.prismaService.message_reads.createMany({
+        data: unreadMessages.map(({ id }) => ({
+          message_id: id,
+          user_id: currentUserId,
+        })),
+      });
+    }
+
+    return {
+      conversation_hash: conversation.hash,
+      read_count: unreadMessages.length,
+      last_read_message_id:
+        unreadMessages.length > 0
+          ? unreadMessages[unreadMessages.length - 1].id
+          : null,
+    };
+  }
+
   async listMessages(
     currentUserId: string,
     conversationHash: string,

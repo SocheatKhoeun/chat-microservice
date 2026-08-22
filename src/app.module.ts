@@ -6,6 +6,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { ProfileModule } from './modules/profile/profile.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { MessagesModule } from './modules/messages/messages.module';
+import { ChatModule } from './modules/chat/chat.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { MessagesModule } from './modules/messages/messages.module';
     ProfileModule,
     ConversationsModule,
     MessagesModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

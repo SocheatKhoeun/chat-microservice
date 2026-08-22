@@ -36,6 +36,56 @@
   (`prisma migrate resolve --applied 0_init`) without re-running any SQL, so `prisma migrate
   status` now reports the database up to date and future schema changes can go through
   `prisma migrate dev` and be tracked, instead of ad-hoc `ALTER TABLE`s.
+- `src/modules/chat/` (`ChatModule`) — real-time chat over Socket.IO at the `/chat` namespace,
+  alongside the REST endpoints above:
+  - Auth happens at the socket handshake: JWT via `auth: { token }` in the client's `io()` options
+    (works from browsers) or an `Authorization: Bearer <token>` header (Node/native clients only,
+    since browsers can't set custom headers on a WebSocket handshake). A missing/invalid token
+    lets the socket connect, emits an `exception` event explaining why, then disconnects it —
+    deliberately not rejected at the transport level, so clients always get a reason instead of a
+    bare close.
+  - Every authenticated socket auto-joins two kinds of Socket.IO room: a personal `user:<id>` room
+    (once, on connect) and a `conversation:<hash>` room (per `conversation:join` call).
+    `conversation_started`/`message:new`/`message:read`/presence broadcast to a conversation's
+    *members' personal rooms* as well as its room, so they reach a user who's connected but hasn't
+    (yet) joined that specific conversation; `typing:start`/`typing:stop` deliberately broadcast to
+    the room only, excluding personal rooms, so only people with that conversation open see it.
+  - Events — `conversation:join`/`conversation:leave` (`{ conversation_hash }`), `message:send`
+    (`{ conversation_hash, body, type?, replied_message_hash? }`, broadcasts `message:new`),
+    `message:read` (`{ conversation_hash }`, also the broadcast event name, carries
+    `read_count`/`last_read_message_id`), `typing:start`/`typing:stop` (`{ conversation_hash }`,
+    relayed verbatim to the room minus the sender), `list_messages`
+    (`{ conversation_hash, cursor?, limit? }`, same pagination as the REST endpoint). Every
+    client→server event acknowledges with `{ success, data?, message? }` instead of throwing, so a
+    client's `emitWithAck` never hangs.
+  - Presence — `presence:online`/`presence:offline`, broadcast to everyone a user shares a
+    conversation with (`ConversationsService#listContactUserIds`), ref-counted per user across
+    sockets so multiple tabs/devices only flip presence on the true first-connect/last-disconnect,
+    not every socket.
+  - `conversation_started` — broadcast to the other member's personal room the moment
+    `ConversationsService#startDirectConversation` creates (or reuses) a direct conversation, so
+    they find out immediately even though they can't have joined a room for a conversation that
+    didn't exist a moment ago. Needed a new `ChatEventsService`/`ChatEventsModule`
+    (`src/common/services/chat-events/`) — a small singleton holding the gateway's Socket.IO server
+    reference — since `ConversationsService` can't import `ChatGateway` directly without a circular
+    module dependency (`ChatModule` already imports `ConversationsModule`).
+  - `chat.gateway.ts` (`ChatGateway`), `chat.model.ts` (`JoinConversationDto`, `MarkReadDto`,
+    `TypingDto`, `WsSendMessageDto`, `ListMessagesWsDto`), `chat.module.ts`.
+- `src/common/utils/validate-dto.util.ts` (`validateDto`, `DtoValidationError`) — runs a
+  class-validator DTO manually outside the HTTP pipeline, since WS handlers don't go through
+  Nest's `ValidationPipe`.
+- `ConversationsService#listMemberUserIds(conversationHash)` and `#listContactUserIds(userId)` —
+  conversation membership / cross-conversation contacts, used by the gateway to build broadcast
+  targets.
+- `MessagesService#markConversationRead(userId, conversationHash)` — marks every message in a
+  conversation the caller hasn't sent and hasn't already read as read; the `message_reads` table
+  existed in the schema but nothing wrote to it before this.
+- `chat-test.html` (repo root) — two-pane browser tester, one Socket.IO connection per pane, for
+  exercising the whole `/chat` API with two real users side by side: independent login/connect per
+  pane, join/leave, send with live message bubbles, mark read, typing indicator (throttled on
+  input, auto-stops after 2s idle), presence, load history, and a "start conversation" button in
+  both directions that demonstrates `conversation_started` firing on a pane that never joined the
+  new conversation's room.
 
 ### Changed
 - **`users.id` is now the external id itself** (`String @id @db.VarChar(255)`) — the separate
@@ -69,6 +119,23 @@
   is imported before `MessagesModule` in `app.module.ts` (the literal route wins), but is
   order-dependent.
 - `app.module.ts` now also imports `ConversationsModule` and `MessagesModule`.
+- Conversation identification over the WebSocket API uses the same public `conversation_hash` the
+  REST endpoints use, not the internal numeric id — tried numeric `conversation_id` first, switched
+  once the REST-vs-WS inconsistency came up.
+- WebSocket event names follow a namespaced `noun:verb` convention (`conversation:join`,
+  `conversation:leave`, `message:send`/`message:new`, `message:read`, `typing:start`/`typing:stop`)
+  instead of the original flat names (`join_conversation`, `send_message`/`message`,
+  `mark_read`/`read`, a single `typing` event with an `is_typing` boolean). `list_messages` and
+  `conversation_started` were left as-is — not part of the naming scheme being matched.
+- `src/core/services/chat-events/` moved to `src/common/services/chat-events/`.
+
+### Removed
+- `ws-test.js` and `ws-client.js` (root-level Node CLI testers for the WebSocket API — one
+  scripted two-user scenario, one free-form single-user client) — removed on request;
+  `chat-test.html` is the remaining way to exercise the gateway manually.
+- A Swagger `description` block documenting the WebSocket API (`main.ts`) — OpenAPI has no concept
+  of a persistent socket with named events, so it never showed up as a route; added as a
+  workaround, then removed again on request.
 
 ### Fixed
 - `RangeError: Invalid time value` crashing every request touching `conversation_members`,
