@@ -9,203 +9,202 @@ datasource db {
 }
 
 model settings {
-  id           Int      @id @default(autoincrement()) @db.UnsignedInt
-  hash         String   @db.VarChar(255) // unique hash for the setting
-  key          String   @unique @db.VarChar(255) // config key, e.g. "payment_type", "api_base_url"
-  value        String   @db.VarChar(255) // config value, e.g. "bakong", "https://..."
-  description  String?  @db.VarChar(255) // optional description of the setting
-  created_at   DateTime @default(now()) @db.Timestamp(0)
-  updated_at   DateTime @default(now()) @updatedAt @db.Timestamp(0)
+  id          Int      @id @default(autoincrement()) @db.UnsignedInt
+  hash        String   @db.VarChar(255) // unique hash for the setting
+  key         String   @unique @db.VarChar(255) // config key, e.g. "payment_type", "api_base_url"
+  value       String   @db.VarChar(255) // config value, e.g. "bakong", "https://..."
+  description String?  @db.VarChar(255) // optional description of the setting
+  created_at  DateTime @default(now()) @db.Timestamp(0)
+  updated_at  DateTime @default(now()) @updatedAt @db.Timestamp(0)
 
   @@map("settings")
 }
 
 model oauth_clients {
-  id             Int                      @id @default(autoincrement())
-  client_id      String                   @unique
-  client_secret  String
-  grant_type_id  Int
-  is_disabled    Boolean                  @default(false)
-  created_at     DateTime                 @default(now())
-  updated_at     DateTime                 @updatedAt
+  id            Int      @id @default(autoincrement())
+  client_id     String   @unique
+  client_secret String
+  grant_type_id Int
+  is_disabled   Boolean  @default(false)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
 
-  grant_type     oauth_client_grant_types @relation(fields: [grant_type_id], references: [id])
-  users          users[]
+  grant_type oauth_client_grant_types @relation(fields: [grant_type_id], references: [id])
+  users      users[]
 
   @@map("oauth_clients")
 }
 
 model oauth_client_grant_types {
-  id             Int             @id @default(autoincrement())
-  username       String          @unique
-  description    String?
-  created_at     DateTime        @default(now())
-  updated_at     DateTime        @updatedAt
+  id          Int      @id @default(autoincrement())
+  username    String   @unique
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
 
-  oauth_clients  oauth_clients[]
+  oauth_clients oauth_clients[]
 
   @@map("oauth_client_grant_types")
 }
 
 model users {
-  id                     Int                    @id @default(autoincrement())
-  external_id            String?                @unique @db.VarChar(255)
-  oauth_client_id        Int?
+  id              String @id @db.VarChar(255)
+  oauth_client_id Int?
 
-  created_at             DateTime               @default(now())
-  updated_at             DateTime               @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  oauth_client           oauth_clients?         @relation(fields: [oauth_client_id], references: [id])
-  created_conversations  conversations[]
-  conversation_members   conversation_members[]
-  sent_messages          messages[]
-  message_reactions      message_reactions[]
-  message_reads          message_reads[]
-  calls                  calls[]
-  call_participants      call_participants[]
+  oauth_client          oauth_clients?         @relation(fields: [oauth_client_id], references: [id])
+  created_conversations conversations[]
+  conversation_members  conversation_members[]
+  sent_messages         messages[]
+  message_reactions     message_reactions[]
+  message_reads         message_reads[]
+  calls                 calls[]
+  call_participants     call_participants[]
 
   @@map("users")
 }
 
 model conversations {
-  id           Int                    @id @default(autoincrement())
-  hash         String                 @unique
-  type         conversation_type?
-  name         String?                @db.VarChar(255)
-  description  String?                @db.VarChar(255)
-  avatar_url   String?                @db.VarChar(255)
-  created_by   Int?
+  id          Int                @id @default(autoincrement())
+  hash        String             @unique
+  type        conversation_type?
+  name        String?            @db.VarChar(255)
+  description String?            @db.VarChar(255)
+  avatar_url  String?            @db.VarChar(255)
+  created_by  String?            @db.VarChar(255)
 
-  created_at   DateTime               @default(now())
-  updated_at   DateTime               @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  creator      users?                 @relation(fields: [created_by], references: [id])
-  members      conversation_members[]
-  messages     messages[]
-  calls        calls[]
+  creator  users?                 @relation(fields: [created_by], references: [id])
+  members  conversation_members[]
+  messages messages[]
+  calls    calls[]
 
   @@map("conversations")
 }
 
 model conversation_members {
-  id               Int                       @id @default(autoincrement())
-  conversation_id  Int
-  user_id          Int
-  nickname         String?                   @db.VarChar(255)
-  role             conversation_member_role?
-  joined_at        DateTime                  @default(now())
-  left_at          DateTime?
+  id              Int                       @id @default(autoincrement())
+  conversation_id Int
+  user_id         String                    @db.VarChar(255)
+  nickname        String?                   @db.VarChar(255)
+  role            conversation_member_role?
+  joined_at       DateTime                  @default(now())
+  left_at         DateTime?
 
-  created_at       DateTime                  @default(now())
-  updated_at       DateTime                  @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  conversation     conversations             @relation(fields: [conversation_id], references: [id])
-  user             users                     @relation(fields: [user_id], references: [id])
+  conversation conversations @relation(fields: [conversation_id], references: [id])
+  user         users         @relation(fields: [user_id], references: [id])
 
   @@map("conversation_members")
 }
 
 model messages {
-  id                  Int                   @id @default(autoincrement())
-  hash                String?               @unique
-  conversation_id     Int
-  sender_id           Int
-  type                message_type?
-  content             String?               @db.Text
-  replied_message_id  Int?
+  id                 Int           @id @default(autoincrement())
+  hash               String?       @unique
+  conversation_id    Int
+  sender_id          String        @db.VarChar(255)
+  type               message_type?
+  content            String?       @db.Text
+  replied_message_id Int?
 
-  created_at          DateTime              @default(now())
-  updated_at          DateTime              @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  conversation        conversations         @relation(fields: [conversation_id], references: [id])
-  sender              users                 @relation(fields: [sender_id], references: [id])
-  replied_message     messages?             @relation("MessageReplies", fields: [replied_message_id], references: [id])
-  replies             messages[]            @relation("MessageReplies")
-  reactions           message_reactions[]
-  reads               message_reads[]
-  attachments         message_attachments[]
+  conversation    conversations         @relation(fields: [conversation_id], references: [id])
+  sender          users                 @relation(fields: [sender_id], references: [id])
+  replied_message messages?             @relation("MessageReplies", fields: [replied_message_id], references: [id])
+  replies         messages[]            @relation("MessageReplies")
+  reactions       message_reactions[]
+  reads           message_reads[]
+  attachments     message_attachments[]
 
   @@map("messages")
 }
 
 model message_reactions {
-  id          Int      @id @default(autoincrement())
-  hash        String?  @unique
-  message_id  Int
-  user_id     Int
-  reaction    String   @db.VarChar(255)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @default(now()) @updatedAt
+  id         Int      @id @default(autoincrement())
+  hash       String?  @unique
+  message_id Int
+  user_id    String   @db.VarChar(255)
+  reaction   String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  message     messages @relation(fields: [message_id], references: [id])
-  user        users    @relation(fields: [user_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id])
+  user    users    @relation(fields: [user_id], references: [id])
 
   @@map("message_reactions")
 }
 
 model message_reads {
-  id          Int      @id @default(autoincrement())
-  message_id  Int
-  user_id     Int
-  read_at     DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  message_id Int
+  user_id    String   @db.VarChar(255)
+  read_at    DateTime @default(now())
 
-  created_at  DateTime @default(now())
-  updated_at  DateTime @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  message     messages @relation(fields: [message_id], references: [id])
-  user        users    @relation(fields: [user_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id])
+  user    users    @relation(fields: [user_id], references: [id])
 
   @@map("message_reads")
 }
 
 model message_attachments {
-  id          Int      @id @default(autoincrement())
-  message_id  Int
-  file_url    String   @db.VarChar(255)
-  file_type   String   @db.VarChar(255)
+  id         Int    @id @default(autoincrement())
+  message_id Int
+  file_url   String @db.VarChar(255)
+  file_type  String @db.VarChar(255)
 
-  created_at  DateTime @default(now())
-  updated_at  DateTime @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  message     messages @relation(fields: [message_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id])
 
   @@map("message_attachments")
 }
 
 model calls {
-  id               Int                 @id @default(autoincrement())
-  hash             String?             @unique
-  conversation_id  Int
-  caller_id        Int
-  type             call_type?
-  status           call_status?
-  started_at       DateTime?
-  answered_at      DateTime?
-  ended_at         DateTime?
+  id              Int          @id @default(autoincrement())
+  hash            String?      @unique
+  conversation_id Int
+  caller_id       String       @db.VarChar(255)
+  type            call_type?
+  status          call_status?
+  started_at      DateTime?
+  answered_at     DateTime?
+  ended_at        DateTime?
 
-  created_at       DateTime            @default(now())
-  updated_at       DateTime            @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  conversation     conversations       @relation(fields: [conversation_id], references: [id])
-  caller           users               @relation(fields: [caller_id], references: [id])
-  participants     call_participants[]
+  conversation conversations       @relation(fields: [conversation_id], references: [id])
+  caller       users               @relation(fields: [caller_id], references: [id])
+  participants call_participants[]
 
   @@map("calls")
 }
 
 model call_participants {
-  id          Int                      @id @default(autoincrement())
-  call_id     Int
-  user_id     Int
-  joined_at   DateTime                 @default(now())
-  left_at     DateTime?
-  status      call_participant_status?
+  id        Int                      @id @default(autoincrement())
+  call_id   Int
+  user_id   String                   @db.VarChar(255)
+  joined_at DateTime                 @default(now())
+  left_at   DateTime?
+  status    call_participant_status?
 
-  created_at  DateTime                 @default(now())
-  updated_at  DateTime                 @default(now()) @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
 
-  call        calls                    @relation(fields: [call_id], references: [id])
-  user        users                    @relation(fields: [user_id], references: [id])
+  call calls @relation(fields: [call_id], references: [id])
+  user users @relation(fields: [user_id], references: [id])
 
   @@map("call_participants")
 }

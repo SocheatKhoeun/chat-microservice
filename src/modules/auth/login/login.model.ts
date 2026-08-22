@@ -1,10 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
-import type { users } from '../../../../generated/prisma/client';
 
-export class LoginDto implements Pick<users, 'external_id'> {
+export class LoginDto {
   @ApiPropertyOptional({
-    description: "The user's unique identifier in the calling system. Omit to log in as a new anonymous user.",
+    description:
+      "The user's unique identifier in the calling system. Omit to log in as a new anonymous user.",
     maxLength: 255,
     nullable: true,
   })
@@ -22,7 +22,6 @@ export class AccessTokenResponseDto {
 }
 
 export interface AccessTokenPayload {
-  sub: number;
-  external_id: string | null;
+  sub: string;
   client_id: number;
 }

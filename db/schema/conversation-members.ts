@@ -7,7 +7,7 @@ export const conversationMembers = mysqlTable('conversation_members', {
   conversation_id: int('conversation_id')
     .notNull()
     .references(() => conversations.id),
-  user_id: int('user_id')
+  user_id: varchar('user_id', { length: 255 })
     .notNull()
     .references(() => users.id),
   nickname: varchar('nickname', { length: 255 }),

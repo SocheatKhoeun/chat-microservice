@@ -2,6 +2,87 @@
 
 ## [Unreleased]
 
+### Added
+- `src/modules/conversations/` (`ConversationsModule`) — 1:1 direct chat, conversation side:
+  - `POST /api/v1/conversations/direct` — starts (or resumes) a direct conversation with another
+    user identified by `external_id`, always sending an initial `message` in the same call so the
+    recipient has something to see. Looks for an existing direct conversation between the two
+    members first (`conversations.findFirst` scoped to both `conversation_members` rows) before
+    creating a new `conversations` + 2 `conversation_members` rows, so a pair of users maps to
+    exactly one conversation no matter how many times it's called.
+  - `GET /api/v1/conversations` — lists the caller's conversations, newest first, `skip`/`take`
+    paginated (default `take: 30`), each item carrying its `last_message` and the other
+    participant's `sender_id` (their external id).
+  - `ConversationsService#assertMembership(conversationHash, userId)` — resolves a conversation by
+    its public `hash` and throws `403` if the caller isn't an active member (`left_at IS NULL`);
+    shared by `MessagesService` below.
+  - `conversations.model.ts` (`StartDirectConversationDto`, `ConversationResponseDto`,
+    `ConversationListItemDto`, `ListConversationsQueryDto`, `ConversationListResponseDto`),
+    `conversations.service.ts`, `conversations.controller.ts`, `conversations.module.ts`.
+- `src/modules/messages/` (`MessagesModule`) — 1:1 direct chat, message side:
+  - `GET /api/v1/conversations/:conversation_hash` — lists messages in a conversation, newest
+    first, cursor-paginated (`cursor`/`limit`, default `limit: 30`).
+  - `POST /api/v1/conversations/:conversation_hash` — sends a message; validates
+    `replied_message_id` belongs to the same conversation when given.
+  - `messages.model.ts` (`SendMessageDto`, `ListMessagesQueryDto`, `MessageResponseDto`,
+    `MessageListResponseDto`), `messages.service.ts`, `messages.controller.ts`,
+    `messages.module.ts`.
+  - Both controllers guarded by `OauthJwtGuard`, tagged `Mobile - Conversations` /
+    `Mobile - Messages` in Swagger.
+- `prisma/migrations/0_init/` — the database had never been baselined into Prisma Migrate (no
+  `prisma/migrations/` directory existed; `db:generate`/`db:migrate` in `package.json` only ever
+  drove Drizzle, which has its own, unrelated migration history). Generated a full-schema
+  `migration.sql` from the current `schema.prisma` and marked it applied
+  (`prisma migrate resolve --applied 0_init`) without re-running any SQL, so `prisma migrate
+  status` now reports the database up to date and future schema changes can go through
+  `prisma migrate dev` and be tracked, instead of ad-hoc `ALTER TABLE`s.
+
+### Changed
+- **`users.id` is now the external id itself** (`String @id @db.VarChar(255)`) — the separate
+  `external_id` column is gone. Anonymous logins (no `external_id` given) now get `id` set to a
+  `generateHash()` value instead of relying on autoincrement. Ripple effects:
+  - Every foreign key that pointed at `users.id` — `conversations.created_by`,
+    `conversation_members.user_id`, `messages.sender_id`, `message_reactions.user_id`,
+    `message_reads.user_id`, `calls.caller_id`, `call_participants.user_id` — changed from `Int`
+    to `String @db.VarChar(255)`, in both `prisma/schema.prisma` and the live database (migrated
+    in place: FKs dropped, columns backfilled via an id map built from each user's old
+    `external_id`, FKs re-added; no data loss).
+  - `db/schema/users.ts` and the other Drizzle files under `db/schema/` (unused by the app, kept
+    in sync anyway) updated to match.
+  - `AccessTokenPayload.sub` (`login.model.ts`) is now `string`; the payload's separate
+    `external_id` claim was dropped as redundant with `sub`.
+  - `ProfileResponseDto` (`profile.model.ts`) dropped its `external_id` field for the same reason.
+  - `ConversationsService#listConversations` no longer needs a second `users.findMany` query to
+    resolve the other participant's external id — `conversation_members.user_id` already *is*
+    that value now.
+- `POST /api/v1/conversations/direct` and `GET`/`POST /api/v1/conversations/:conversation_hash`
+  identify the conversation by its public `hash`, not its internal integer `id`.
+- `ConversationResponseDto`/`ConversationListItemDto`'s `other_user_id: number` field is now
+  `sender_id: string | null` (the other participant's external id, not an internal numeric id);
+  both list responses' `items` field is now named `data`.
+- `GET /api/v1/conversations` pagination changed from cursor-based (`cursor`/`limit`) to plain
+  `skip`/`take`.
+- `MessagesController`'s routes lost the `/messages` suffix — was
+  `GET`/`POST /v1/conversations/:conversationHash/messages`, is now
+  `GET`/`POST /v1/conversations/:conversation_hash` — which means it shares its base path with
+  `ConversationsController`'s literal `/direct` route. Works today because `ConversationsModule`
+  is imported before `MessagesModule` in `app.module.ts` (the literal route wins), but is
+  order-dependent.
+- `app.module.ts` now also imports `ConversationsModule` and `MessagesModule`.
+
+### Fixed
+- `RangeError: Invalid time value` crashing every request touching `conversation_members`,
+  `calls`, or `call_participants` — `left_at`/`answered_at`/`ended_at` were
+  `TIMESTAMP NOT NULL DEFAULT '0000-00-00 00:00:00'` in the live database despite
+  `schema.prisma` declaring them nullable (leftover from the original Drizzle-generated DDL);
+  `@prisma/adapter-mariadb` can't parse that zero-date default into a `Date`. Fixed twice in this
+  window — it resurfaced after the database was reset/reseeded (different user data appeared),
+  most likely by `drizzle-kit migrate` re-applying the original zero-date DDL, since the database
+  had no Prisma migration history to protect it (see `prisma/migrations/0_init` above).
+- `GET /api/v1/conversations`'s default `take` (was `?? 10`) and
+  `GET /api/v1/conversations/:conversation_hash`'s default `limit` (was `?? 20`) silently didn't
+  match their own Swagger-documented default of `30` — both now actually default to `30`.
+
 ## [0.0.4] - 2026-08-22
 
 ### Added

@@ -1,7 +1,12 @@
-import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../core/services/prisma/prisma.service';
 import { SettingService } from '../../../core/services/setting/setting.service';
+import { generateHash } from '../../../common/utils/generate-hash.util';
 import { AccessTokenPayload, LoginDto } from './login.model';
 
 @Injectable()
@@ -17,7 +22,6 @@ export class LoginService {
 
     const access_token = await this.issueAccessToken({
       sub: user.id,
-      external_id: user.external_id,
       client_id: oauthClientId,
     });
 
@@ -40,11 +44,11 @@ export class LoginService {
   private async resolveUser(oauthClientId: number, dto: LoginDto) {
     if (!dto.external_id)
       return this.prismaService.users.create({
-        data: { oauth_client_id: oauthClientId },
+        data: { id: generateHash(), oauth_client_id: oauthClientId },
       });
 
     const existing = await this.prismaService.users.findUnique({
-      where: { external_id: dto.external_id },
+      where: { id: dto.external_id },
     });
 
     if (existing) {
@@ -57,7 +61,7 @@ export class LoginService {
     }
 
     return this.prismaService.users.create({
-      data: { external_id: dto.external_id, oauth_client_id: oauthClientId },
+      data: { id: dto.external_id, oauth_client_id: oauthClientId },
     });
   }
 }

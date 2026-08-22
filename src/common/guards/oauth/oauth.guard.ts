@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { compare } from 'bcrypt';
 import { PrismaService } from 'src/core/services/prisma/prisma.service';
 
@@ -12,7 +17,9 @@ export class OauthGuard implements CanActivate {
 
     const basicMatch = /^Basic\s+([A-Za-z0-9._~+/]+=*)$/.exec(basic);
     if (!basicMatch)
-      throw new UnauthorizedException(['invalid oauth clientId or clientSecret||ព័ត៌មានសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ!']);
+      throw new UnauthorizedException([
+        'invalid oauth clientId or clientSecret||ព័ត៌មានសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ!',
+      ]);
 
     const base64Credentials = basicMatch[1];
     const [clientId, clientSecret] = Buffer.from(base64Credentials, 'base64')
@@ -24,10 +31,14 @@ export class OauthGuard implements CanActivate {
     });
 
     if (!oauthClient || oauthClient.is_disabled)
-      throw new UnauthorizedException(['invalid oauth clientId or clientSecret||ព័ត៌មានសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ!']);
+      throw new UnauthorizedException([
+        'invalid oauth clientId or clientSecret||ព័ត៌មានសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ!',
+      ]);
 
     if (!(await compare(clientSecret, oauthClient.client_secret)))
-      throw new UnauthorizedException(['invalid oauth clientId or clientSecret||ព័ត៌មានសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ!']);
+      throw new UnauthorizedException([
+        'invalid oauth clientId or clientSecret||ព័ត៌មានសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ!',
+      ]);
 
     request.oauthClient = oauthClient;
     return true;

@@ -8,7 +8,7 @@ export const conversations = mysqlTable('conversations', {
   name: varchar('name', { length: 255 }),
   description: varchar('description', { length: 255 }),
   avatar_url: varchar('avatar_url', { length: 255 }),
-  created_by: int('created_by').references(() => users.id),
+  created_by: varchar('created_by', { length: 255 }).references(() => users.id),
   created_at: timestamp('created_at').defaultNow().notNull(),
   updated_at: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
 });

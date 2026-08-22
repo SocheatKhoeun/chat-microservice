@@ -16,7 +16,7 @@ export const messages = mysqlTable('messages', {
   conversation_id: int('conversation_id')
     .notNull()
     .references(() => conversations.id),
-  sender_id: int('sender_id')
+  sender_id: varchar('sender_id', { length: 255 })
     .notNull()
     .references(() => users.id),
   type: mysqlEnum('type', ['text', 'image', 'video', 'audio', 'file', 'system']),

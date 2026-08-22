@@ -1,17 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import type { users } from '../../../generated/prisma/client';
 
-export class ProfileResponseDto
-  implements Pick<users, 'id' | 'external_id' | 'created_at' | 'updated_at'>
-{
-  @ApiProperty({ description: 'The internal id of the user.' })
-  id!: number;
-
-  @ApiPropertyOptional({
-    description: "The user's unique identifier in the calling system.",
-    nullable: true,
+export class ProfileResponseDto implements Pick<
+  users,
+  'id' | 'created_at' | 'updated_at'
+> {
+  @ApiProperty({
+    description:
+      "The user's unique identifier (their id in the calling system, or a generated one for anonymous users).",
   })
-  external_id!: string | null;
+  id!: string;
 
   @ApiProperty({ description: 'When the user was created.' })
   created_at!: Date;

@@ -1,7 +1,7 @@
 CREATE TABLE `call_participants` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`call_id` int NOT NULL,
-	`user_id` int NOT NULL,
+	`user_id` varchar(255) NOT NULL,
 	`joined_at` timestamp NOT NULL DEFAULT (now()),
 	`left_at` timestamp,
 	`status` enum('invited','ringing','joined','left','rejected','missed'),
@@ -14,7 +14,7 @@ CREATE TABLE `calls` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`hash` varchar(255),
 	`conversation_id` int NOT NULL,
-	`caller_id` int NOT NULL,
+	`caller_id` varchar(255) NOT NULL,
 	`type` enum('audio','video'),
 	`status` enum('ringing','active','ended','missed','rejected','cancelled'),
 	`started_at` timestamp,
@@ -29,7 +29,7 @@ CREATE TABLE `calls` (
 CREATE TABLE `conversation_members` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`conversation_id` int NOT NULL,
-	`user_id` int NOT NULL,
+	`user_id` varchar(255) NOT NULL,
 	`nickname` varchar(255),
 	`role` enum('owner','admin','member'),
 	`joined_at` timestamp NOT NULL DEFAULT (now()),
@@ -46,7 +46,7 @@ CREATE TABLE `conversations` (
 	`name` varchar(255),
 	`description` varchar(255),
 	`avatar_url` varchar(255),
-	`created_by` int,
+	`created_by` varchar(255),
 	`created_at` timestamp NOT NULL DEFAULT (now()),
 	`updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
 	CONSTRAINT `conversations_id` PRIMARY KEY(`id`),
@@ -87,20 +87,18 @@ CREATE TABLE `settings` (
 );
 --> statement-breakpoint
 CREATE TABLE `users` (
-	`id` int AUTO_INCREMENT NOT NULL,
-	`external_id` varchar(255),
+	`id` varchar(255) NOT NULL,
 	`oauth_client_id` int,
 	`created_at` timestamp NOT NULL DEFAULT (now()),
 	`updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
-	CONSTRAINT `users_id` PRIMARY KEY(`id`),
-	CONSTRAINT `users_external_id_unique` UNIQUE(`external_id`)
+	CONSTRAINT `users_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `messages` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`hash` varchar(255),
 	`conversation_id` int NOT NULL,
-	`sender_id` int NOT NULL,
+	`sender_id` varchar(255) NOT NULL,
 	`type` enum('text','image','video','audio','file','system'),
 	`content` text,
 	`replied_message_id` int,
@@ -114,7 +112,7 @@ CREATE TABLE `message_reactions` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`hash` varchar(255),
 	`message_id` int NOT NULL,
-	`user_id` int NOT NULL,
+	`user_id` varchar(255) NOT NULL,
 	`reaction` varchar(255) NOT NULL,
 	`created_at` timestamp NOT NULL DEFAULT (now()),
 	`updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
@@ -125,7 +123,7 @@ CREATE TABLE `message_reactions` (
 CREATE TABLE `message_reads` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`message_id` int NOT NULL,
-	`user_id` int NOT NULL,
+	`user_id` varchar(255) NOT NULL,
 	`read_at` timestamp NOT NULL DEFAULT (now()),
 	`created_at` timestamp NOT NULL DEFAULT (now()),
 	`updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,

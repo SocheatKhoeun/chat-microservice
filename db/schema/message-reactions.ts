@@ -8,7 +8,7 @@ export const messageReactions = mysqlTable('message_reactions', {
   message_id: int('message_id')
     .notNull()
     .references(() => messages.id),
-  user_id: int('user_id')
+  user_id: varchar('user_id', { length: 255 })
     .notNull()
     .references(() => users.id),
   reaction: varchar('reaction', { length: 255 }).notNull(),

@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "f3ea5cbc-9c28-4ef3-9428-05300d77945f",
+  "id": "ff28aae2-85cd-4a5e-ba35-702a6284ed30",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "call_participants": {
@@ -23,7 +23,7 @@
         },
         "user_id": {
           "name": "user_id",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -134,7 +134,7 @@
         },
         "caller_id": {
           "name": "caller_id",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -258,7 +258,7 @@
         },
         "user_id": {
           "name": "user_id",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -397,7 +397,7 @@
         },
         "created_by": {
           "name": "created_by",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -681,16 +681,9 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "int",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "external_id": {
-          "name": "external_id",
           "type": "varchar(255)",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "oauth_client_id": {
@@ -742,14 +735,7 @@
           ]
         }
       },
-      "uniqueConstraints": {
-        "users_external_id_unique": {
-          "name": "users_external_id_unique",
-          "columns": [
-            "external_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "checkConstraint": {}
     },
     "messages": {
@@ -778,7 +764,7 @@
         },
         "sender_id": {
           "name": "sender_id",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -908,7 +894,7 @@
         },
         "user_id": {
           "name": "user_id",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -1004,7 +990,7 @@
         },
         "user_id": {
           "name": "user_id",
-          "type": "int",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false

@@ -8,7 +8,7 @@ export const calls = mysqlTable('calls', {
   conversation_id: int('conversation_id')
     .notNull()
     .references(() => conversations.id),
-  caller_id: int('caller_id')
+  caller_id: varchar('caller_id', { length: 255 })
     .notNull()
     .references(() => users.id),
   type: mysqlEnum('type', ['audio', 'video']),

@@ -1,4 +1,4 @@
-import { int, mysqlTable, timestamp } from 'drizzle-orm/mysql-core';
+import { int, mysqlTable, timestamp, varchar } from 'drizzle-orm/mysql-core';
 import { messages } from './messages';
 import { users } from './users';
 
@@ -7,7 +7,7 @@ export const messageReads = mysqlTable('message_reads', {
   message_id: int('message_id')
     .notNull()
     .references(() => messages.id),
-  user_id: int('user_id')
+  user_id: varchar('user_id', { length: 255 })
     .notNull()
     .references(() => users.id),
   read_at: timestamp('read_at').defaultNow().notNull(),
