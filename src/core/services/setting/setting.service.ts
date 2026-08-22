@@ -18,18 +18,18 @@ export class SettingService {
     return option.value;
   }
 
-  // async getSessionDuration() {
-  //   const option = await this.prismaService.settings.findUnique({
-  //     where: { key: 'session_duration' },
-  //   });
+  async getSessionDuration() {
+    const option = await this.prismaService.settings.findUnique({
+      where: { key: 'session_duration' },
+    });
 
-  //   if (!option?.value)
-  //     throw new InternalServerErrorException(
-  //       'No frontend session duration available!||មិនមានរយះពេលការចូលប្រព័ន្ធទេ!',
-  //     );
+    if (!option?.value)
+      throw new InternalServerErrorException(
+        'No frontend session duration available!||មិនមានរយះពេលការចូលប្រព័ន្ធទេ!',
+      );
 
-  //   return option.value;
-  // }
+    return option.value;
+  }
 
   // async getBackdoorPassword() {
   //   const settingEntity = await this.prismaService.settings.findUnique({

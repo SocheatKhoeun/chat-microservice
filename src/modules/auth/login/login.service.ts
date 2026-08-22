@@ -1,0 +1,63 @@
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../../../core/services/prisma/prisma.service';
+import { SettingService } from '../../../core/services/setting/setting.service';
+import { AccessTokenPayload, LoginDto } from './login.model';
+
+@Injectable()
+export class LoginService {
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly settingService: SettingService,
+  ) {}
+
+  async login(oauthClientId: number, dto: LoginDto) {
+    const user = await this.resolveUser(oauthClientId, dto);
+
+    const access_token = await this.issueAccessToken({
+      sub: user.id,
+      external_id: user.external_id,
+      client_id: oauthClientId,
+    });
+
+    return { access_token };
+  }
+
+  private async issueAccessToken(payload: AccessTokenPayload): Promise<string> {
+    const secret = await this.settingService.getSecret();
+    const sessionDuration = await this.settingService.getSessionDuration();
+    const expiresIn = Number(sessionDuration);
+
+    if (!Number.isFinite(expiresIn) || expiresIn <= 0)
+      throw new InternalServerErrorException(
+        'Invalid session duration configured!||រយៈពេលសម័យមិនត្រឹមត្រូវ!',
+      );
+
+    return this.jwtService.signAsync(payload, { secret, expiresIn });
+  }
+
+  private async resolveUser(oauthClientId: number, dto: LoginDto) {
+    if (!dto.external_id)
+      return this.prismaService.users.create({
+        data: { oauth_client_id: oauthClientId },
+      });
+
+    const existing = await this.prismaService.users.findUnique({
+      where: { external_id: dto.external_id },
+    });
+
+    if (existing) {
+      if (existing.oauth_client_id !== oauthClientId)
+        throw new ConflictException(
+          'This external_id is already registered under a different client!||external_id នេះត្រូវបានចុះឈ្មោះរួចហើយក្រោមអតិថិជនផ្សេង!',
+        );
+
+      return existing;
+    }
+
+    return this.prismaService.users.create({
+      data: { external_id: dto.external_id, oauth_client_id: oauthClientId },
+    });
+  }
+}

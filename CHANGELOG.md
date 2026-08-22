@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-08-22
+
+### Added
+- `src/modules/auth/` — `POST /api/v1/auth/login`: resolves-or-creates a user by `external_id`
+  (same rules as the old `users.service.ts`: anonymous user when omitted, existing user returned
+  when it already belongs to the calling client, `ConflictException` when it belongs to a
+  different one) and returns a JWT `{ access_token }`. `auth.module.ts` wires `JwtModule`,
+  `PrismaService`, `SettingService`, `OauthGuard` (Basic auth) into `login/login.controller.ts` +
+  `login/login.service.ts`; `login/login.model.ts` holds `LoginDto`, `AccessTokenResponseDto`,
+  and the `AccessTokenPayload` JWT-claims shape (`sub`, `external_id`, `client_id`) shared by the
+  guard, decorator, and profile module below.
+- `SettingService.getSessionDuration()` uncommented and wired up: `LoginService.issueAccessToken`
+  now signs the token with `expiresIn` read from the `session_duration` setting (seconds; `500`
+  if it's missing/non-numeric/`<= 0`) instead of issuing a non-expiring token.
+- `OauthJwtGuard` now does more than verify the JWT signature: after `verifyAsync`, it loads the
+  `users` row for `token.sub` and rejects with `401` if it's missing or its `oauth_client_id`
+  no longer matches `token.client_id` (token for a deleted/reassigned user), then attaches both
+  `request.token` (decoded JWT) and `request.user` (the DB row) to the request. Needs
+  `PrismaService` injected now.
+- `src/common/decorators/token.decorator.ts` (`CurrentToken`) — reads `request.token`; not
+  currently used by any controller (`profile` reads `request.user` directly via `@Req()`
+  instead), kept as a ready-made primitive for a future endpoint that only needs the claims.
+- `src/modules/profile/` — `GET /api/v1/profile/me`, guarded by `OauthJwtGuard`:
+  `profile.controller.ts` reads `req.user.id` off the raw request and calls
+  `profile.service.ts#getProfile(userId)`, which re-queries `users` scoped to
+  `{ id, external_id, created_at, updated_at }` (`oauth_client_id` never leaves the query) and
+  throws `NotFoundException` if the id doesn't resolve. `profile.model.ts` holds
+  `ProfileResponseDto`.
+
+### Changed
+- `app.module.ts` now imports `AuthModule` and `ProfileModule` in place of `UsersModule`.
+
+### Removed
+- `src/modules/users/` (`users.controller.ts`/`.service.ts`/`.model.ts`/`.module.ts`) — the
+  `POST /api/v1/users/registration` endpoint from 0.0.3 is superseded by
+  `POST /api/v1/auth/login` above; no other module referenced it.
+- A client-credentials `POST /api/v1/auth/token` endpoint (token bound to the client only, no
+  user) was added alongside `login` and then removed again as unneeded — `LoginService` no
+  longer exposes `issueAccessToken` publicly, it's a private helper called only by `login()`.
+- `src/common/decorators/user.decorator.ts` (`CurrentUser`) — added for `profile.controller.ts`,
+  then deleted once that controller settled on reading `request.user` off a raw `@Req()` instead.
+
 ## [0.0.3] - 2026-08-22
 
 ### Added
