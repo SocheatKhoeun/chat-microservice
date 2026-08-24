@@ -7,6 +7,7 @@ import { ProfileModule } from './modules/profile/profile.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { MessagesModule } from './modules/messages/messages.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { AttachmentsModule } from './modules/attachments/attachments.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ChatModule } from './modules/chat/chat.module';
     ConversationsModule,
     MessagesModule,
     ChatModule,
+    AttachmentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

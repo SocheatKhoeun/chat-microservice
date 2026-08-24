@@ -9,11 +9,17 @@ export class ProfileResponseDto implements Pick<
     description:
       "The user's unique identifier (their id in the calling system, or a generated one for anonymous users).",
   })
-  id!: string;
+  id: string;
 
   @ApiProperty({ description: 'When the user was created.' })
-  created_at!: Date;
+  created_at: Date;
 
   @ApiProperty({ description: 'When the user was last updated.' })
-  updated_at!: Date;
+  updated_at: Date;
+
+  constructor(user: Pick<users, 'id' | 'created_at' | 'updated_at'>) {
+    this.id = user.id;
+    this.created_at = user.created_at;
+    this.updated_at = user.updated_at;
+  }
 }

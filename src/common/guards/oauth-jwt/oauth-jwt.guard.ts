@@ -39,7 +39,7 @@ export class OauthJwtGuard implements CanActivate {
 
     try {
       token = await this.jwtService.verifyAsync(jwtToken, { secret });
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException([
         'Token is invalid or expired||កូដសម្គាល់កម្មវិធីមិនត្រឹមត្រូវ ឬ ផុតកំណត់!',
       ]);

@@ -112,6 +112,8 @@ model messages {
   type               message_type?
   content            String?       @db.Text
   replied_message_id Int?
+  edited_at          DateTime?
+  deleted_at         DateTime?
 
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
@@ -139,6 +141,7 @@ model message_reactions {
   message messages @relation(fields: [message_id], references: [id])
   user    users    @relation(fields: [user_id], references: [id])
 
+  @@unique([message_id, user_id])
   @@map("message_reactions")
 }
 

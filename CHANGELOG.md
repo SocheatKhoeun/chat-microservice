@@ -1,5 +1,11 @@
 # Changelog
 
+#   client_id:     express-app
+#   client_secret: 70979c451ea1383b6d99e5db4b44fd9ee11a475b3920a1b5f07d4bb00e0c0ee8
+
+#   client_id:     oms-app
+#   client_secret: 7129338d29483ec80d2d807c15685545df8b12226a9545a4d03e614697abe5ad
+
 ## [Unreleased]
 
 ### Added

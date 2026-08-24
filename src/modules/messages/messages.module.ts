@@ -2,13 +2,14 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { SettingService } from '../../core/services/setting/setting.service';
+import { ChatEventsModule } from '../../common/services/chat-events/chat-events.module';
 import { OauthJwtGuard } from '../../common/guards/oauth-jwt/oauth-jwt.guard';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { MessagesController } from './messages.controller';
 import { MessagesService } from './messages.service';
 
 @Module({
-  imports: [JwtModule.register({}), ConversationsModule],
+  imports: [JwtModule.register({}), ConversationsModule, ChatEventsModule],
   controllers: [MessagesController],
   providers: [MessagesService, PrismaService, SettingService, OauthJwtGuard],
   exports: [MessagesService],

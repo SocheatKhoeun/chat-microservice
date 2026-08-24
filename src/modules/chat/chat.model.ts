@@ -1,5 +1,19 @@
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
 import { message_type } from '../../../generated/prisma/enums';
+import { AttachmentInputDto } from '../messages/messages.model';
 
 export class JoinConversationDto {
   @IsString()
@@ -37,6 +51,13 @@ export class WsSendMessageDto {
   @IsString()
   @IsNotEmpty()
   replied_message_hash?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => AttachmentInputDto)
+  attachments?: AttachmentInputDto[];
 }
 
 export class ListMessagesWsDto {
