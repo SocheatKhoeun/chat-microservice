@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsDefined,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -12,7 +13,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { message_type } from '../../../generated/prisma/enums';
+import { call_type, message_type } from '../../../generated/prisma/enums';
 import { AttachmentInputDto } from '../messages/messages.model';
 
 export class JoinConversationDto {
@@ -58,6 +59,45 @@ export class WsSendMessageDto {
   @ValidateNested({ each: true })
   @Type(() => AttachmentInputDto)
   attachments?: AttachmentInputDto[];
+}
+
+export class CallInviteDto {
+  @IsString()
+  @IsNotEmpty()
+  conversation_hash!: string;
+
+  @IsEnum(call_type)
+  type!: call_type;
+}
+
+export class CallActionDto {
+  @IsString()
+  @IsNotEmpty()
+  call_hash!: string;
+}
+
+export class CallSignalDto {
+  @IsString()
+  @IsNotEmpty()
+  call_hash!: string;
+
+  // The WebRTC SDP answer — opaque to the server, just relayed to the other participants.
+  @IsDefined()
+  signal!: unknown;
+}
+
+export class CallIceCandidateDto {
+  @IsString()
+  @IsNotEmpty()
+  call_hash!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  target_user_id!: string;
+
+  // A WebRTC ICE candidate — opaque to the server, just relayed to the target participant.
+  @IsDefined()
+  signal!: unknown;
 }
 
 export class ListMessagesWsDto {

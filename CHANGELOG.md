@@ -1,11 +1,5 @@
 # Changelog
 
-#   client_id:     express-app
-#   client_secret: 70979c451ea1383b6d99e5db4b44fd9ee11a475b3920a1b5f07d4bb00e0c0ee8
-
-#   client_id:     oms-app
-#   client_secret: 7129338d29483ec80d2d807c15685545df8b12226a9545a4d03e614697abe5ad
-
 ## [Unreleased]
 
 ### Added
@@ -91,7 +85,112 @@
   pane, join/leave, send with live message bubbles, mark read, typing indicator (throttled on
   input, auto-stops after 2s idle), presence, load history, and a "start conversation" button in
   both directions that demonstrates `conversation_started` firing on a pane that never joined the
-  new conversation's room.
+  new conversation's room. Later extended across every phase below — group management panel,
+  attachment upload, reactions/edit/delete/forward buttons, "Delivered to/Seen by" status lines,
+  `last_seen_at` display, and a full Call panel (see Calls below).
+- **Group chat** (schema-ready: `conversation_type.group`, `conversation_member_role`,
+  `conversations.name`/`description`/`avatar_url`):
+  - `POST /v1/conversations/group` — create a group with a name + initial member list (creator
+    becomes `owner`).
+  - `POST /v1/conversations/:hash/members` — add members (owner/admin only).
+  - `DELETE /v1/conversations/:hash/members/:user_id` — remove a member (owner/admin only), or
+    leave yourself by passing your own user id.
+  - `PATCH /v1/conversations/:hash` — update group info (name/description/avatar; owner/admin
+    only).
+  - `PATCH /v1/conversations/:hash/members/:user_id` — promote/demote a member's role (owner only;
+    the owner can't be removed or have their own role changed via this endpoint).
+  - `GET /v1/conversations/:hash/members` — list members with roles (works for direct conversations
+    too).
+  - WS broadcasts on the REST actions above: `group:created`, `group:updated`, `member:added`,
+    `member:removed`, `member:role_updated` (via `ChatEventsService`, same best-effort pattern as
+    `conversation_started`).
+  - Presence/typing/read-receipt broadcasts needed no group-specific code — `listContactUserIds`/
+    `broadcastToConversation` never filtered by conversation type, so N-member support was already
+    structural.
+  - `ChatEventsService` refactored to own room-naming (`conversationRoom`/`userRoom`) and a shared
+    `broadcastToConversation`/`notifyUsers`, reused by both `ChatGateway` and `ConversationsService`
+    (removes the room-targeting duplication that existed before).
+- **Rich messages** (reactions/attachments were schema-ready; edit/delete needed a migration):
+  - Media attachments: `SendMessageDto`/`WsSendMessageDto` take an `attachments: [{file_url,
+    file_type}]` array (the client uploads the file elsewhere and just registers the URL — no
+    binary-upload endpoint on the message API itself, matching the `avatar_url` convention already
+    used); persisted to `message_attachments`, returned on every message payload.
+  - Emoji reactions: `POST`/`DELETE /v1/conversations/:hash/:message_hash/reactions` + WS broadcast
+    (`reaction:added`/`reaction:removed`). One reaction per user per message — reacting again
+    replaces it, backed by a new `@@unique([message_id, user_id])` constraint on
+    `message_reactions`.
+  - Edit message — `PATCH /v1/conversations/:hash/:message_hash` (sender only); new
+    `messages.edited_at` column; broadcasts `message:edited`.
+  - Delete/unsend message — `DELETE /v1/conversations/:hash/:message_hash` (sender only); new
+    `messages.deleted_at` column; nulls `content` and removes the message's `message_attachments`
+    rows; broadcasts `message:deleted`.
+  - Forward a message — `POST /v1/conversations/:hash/:message_hash/forward` (must be a member of
+    both the source and target conversation); copies content + attachments into a new message in
+    the target, broadcasts `message:new` there.
+  - `prisma/migrations/20260824065337_add_message_edit_delete_and_reaction_unique/` — adds
+    `messages.edited_at`/`deleted_at` and the reaction unique constraint.
+- **MinIO-backed attachment uploads** — `POST /v1/attachments/upload` (multipart): detects
+  `attachment_type` from the file's mimetype, uploads to the configured bucket, returns
+  `{file_url, file_type}` ready to drop into a message's `attachments`. `src/modules/attachments/`
+  (`attachments.service.ts` owns the MinIO client logic directly — deliberately not a separate
+  shared storage service, so upload concerns stay inside the one module that owns them). Config is
+  env-driven (`S3_ENDPOINT`/`S3_PORT`/`S3_USE_SSL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`);
+  missing config logs a warning instead of crashing the app at boot.
+- **Presence & delivery fidelity**:
+  - "Delivered" vs "Read" distinction — new `message_deliveries` table (mirrors `message_reads`).
+    `POST /v1/conversations/:hash/:message_hash/delivered` acks receipt (idempotent — first ack per
+    user sticks); broadcasts `message:delivered`. `markConversationRead` also back-fills a delivery
+    record for anything marked read without an explicit prior ack (read implies delivered).
+    `MessageResponseDto` now carries both `reads: [{user_id, read_at}]` and
+    `deliveries: [{user_id, delivered_at}]`.
+  - Per-user "last seen" timestamp — `users.last_seen_at`, set in `ChatGateway.markOffline` the
+    moment a user's last socket disconnects (best-effort — a DB failure here doesn't block the
+    presence broadcast). Included in the `presence:offline` WS payload and on every
+    `GroupMemberDto` (`GET /v1/conversations/:hash/members`).
+  - "Seen by" list for group messages — the `reads` array above; works at any conversation size,
+    not group-specific code.
+  - `prisma/migrations/20260824084140_add_presence_and_delivery_tracking/` — adds
+    `users.last_seen_at` and the `message_deliveries` table (`@@unique([message_id, user_id])`).
+  - `prisma/migrations/20260824085333_add_message_reads_unique_constraint/` — adds
+    `@@unique([message_id, user_id])` on `message_reads`.
+- **Calls (voice/video signaling)** — `src/modules/calls/` (`CallsModule`): WS-only, matching the
+  existing `typing:*`/presence pattern rather than messages' REST-triggers-broadcast pattern, since
+  calls are inherently real-time. No migration needed — `calls`/`call_participants` and their enums
+  were already schema-ready.
+  - `call:invite` `{conversation_hash, type}` — caller must be a conversation member; creates the
+    `calls` row (`status: ringing`) plus one `call_participants` row per active member (caller:
+    `joined`, everyone else: `invited`). Rejects if the conversation already has a live call, or has
+    no one else to call.
+  - `call:ring` `{call_hash}` — callee's device is alerting; flips their participant row `invited`
+    → `ringing`.
+  - `call:answer` `{call_hash, signal}` — flips the answering participant to `joined`; the first
+    answer flips the call itself to `active` and stamps `answered_at`. `signal` (the SDP answer) is
+    opaque to the server, relayed verbatim.
+  - `call:reject` `{call_hash}` — flips the declining participant to `rejected` (the caller can't
+    reject their own call — use `call:end` to cancel). Auto-closes the call as `rejected` if nobody
+    else ever joined.
+  - `call:ice-candidate` `{call_hash, target_user_id, signal}` — pure relay, no DB write; delivered
+    only to `target_user_id`'s personal room (never conversation-wide), correct for a mesh WebRTC
+    topology. Also carries the initial SDP offer (`{type: 'offer', sdp}`) — there's no separate
+    "send offer" event; this generic targeted-relay channel doubles as that.
+  - `call:end` `{call_hash}` — flips the leaving participant to `left`; once nobody is left
+    `joined`, closes the call as `cancelled` (caller hung up before anyone answered) or `ended`
+    (someone had joined), and bulk-flips anyone still `invited`/`ringing` to `missed`. Idempotent.
+  - Group calls: `call:invite` rings every active conversation member, not just one;
+    `call:ice-candidate`'s `target_user_id` lets clients build a pairwise mesh across however many
+    joined.
+  - Every event broadcasts to the call's own participants via `ChatEventsService.notifyUsers`
+    (personal rooms), deliberately narrower than `broadcastToConversation` — not every conversation
+    member necessarily has the call UI open.
+  - `GET /v1/conversations/:hash/calls` — call history, cursor-paginated exactly like the messages
+    list endpoint (`ListCallsQueryDto`/`CallListResponseDto` mirror their messages equivalents).
+  - `chat-test.html` — real Call panel per pane (audio/video select, Start/End call, incoming-call
+    banner with Accept/Reject, local + remote `<video>` tiles) using actual `getUserMedia`/
+    `RTCPeerConnection`, not simulated signaling.
+  - A REST `POST .../calls` to start a call over plain HTTP was tried and then deliberately
+    reverted — every step after inviting (`ring`/`answer`/`reject`/`ice-candidate`/`end`) still
+    requires a live WS connection anyway, so starting over WS too keeps the whole lifecycle on one
+    transport. Starting a call is WS-only (`call:invite`), same as the rest of it.
 
 ### Changed
 - **`users.id` is now the external id itself** (`String @id @db.VarChar(255)`) — the separate
@@ -134,6 +233,24 @@
   `mark_read`/`read`, a single `typing` event with an `is_typing` boolean). `list_messages` and
   `conversation_started` were left as-is — not part of the naming scheme being matched.
 - `src/core/services/chat-events/` moved to `src/common/services/chat-events/`.
+- **`external_id` → `user_id` rename, API-wide** — it was always just `users.id` under a different
+  name at the API boundary; only the field/param name changes, no behavior change.
+  `LoginDto.user_id`, `StartDirectConversationDto.user_id`,
+  `CreateGroupConversationDto`/`AddGroupMembersDto.member_user_ids`, the `:user_id` route params on
+  the member endpoints, and every description/error string that said "external id".
+- `ChatGateway`'s JWT-verification logic was briefly extracted into a shared
+  `AccessTokenResolverService.resolve()` (deduplicating it against `OauthJwtGuard`'s identical
+  logic), then **reverted at explicit request** — `OauthJwtGuard` and `ChatGateway` each own their
+  independent verification logic again, on purpose; the duplication is back by design.
+- `MessagesService`/`ConversationsService` had several private response-mapping helpers
+  (`mapMessage`, `mapMember`, `mapGroupConversation`, etc.) converted to DTO classes with
+  constructors instead (`new MessageResponseDto(message)` rather than a function call) — applied
+  across every module (messages, conversations, attachments, login, profile) for consistency with
+  the existing `RepliedMessageDto` pattern.
+- Race-condition protection on `reactToMessage`/`markDelivered` (see Fixed, below) was added, then
+  the raw-SQL/retry version of it was **explicitly removed again at request** — both now use plain
+  unprotected `upsert()` calls. The underlying race (see Fixed) is real and reintroduced by this;
+  documented here so it isn't mistaken for an oversight.
 
 ### Removed
 - `ws-test.js` and `ws-client.js` (root-level Node CLI testers for the WebSocket API — one
@@ -155,6 +272,65 @@
 - `GET /api/v1/conversations`'s default `take` (was `?? 10`) and
   `GET /api/v1/conversations/:conversation_hash`'s default `limit` (was `?? 20`) silently didn't
   match their own Swagger-documented default of `30` — both now actually default to `30`.
+- **Presence race on fast disconnect** — `handleConnection` fired `authenticate()` without awaiting
+  it, and `handleDisconnect` never waited on `client.data.authenticated`. A socket that disconnected
+  mid-auth could get marked online *after* its disconnect had already been processed, leaving it
+  stuck "online" forever. `handleDisconnect` now awaits `client.data.authenticated` first.
+- **Uncaught broadcast could 500 an already-successful request** — `startDirectConversation` called
+  `chatEventsService.notifyUser(...)` unguarded after the transaction committed. Wrapped in
+  try/catch with a warning log (now `ChatEventsService.safeBroadcast()`, shared by every broadcast
+  call site) — a broadcast failure no longer fails the request.
+- **WS error handler leaked internals / collapsed exception types** — `ChatGateway#handle()`'s
+  catch-all forwarded any thrown error's raw `.message` (including unexpected DB errors) to the
+  client, and treated `NotFoundException`/`ForbiddenException`/plain `Error` identically. Known
+  `HttpException`s still return their intended message; anything else is logged server-side and
+  replaced with a generic "Something went wrong!" before it reaches the client.
+- **Undocumented token-via-query-string auth path** — `extractToken()` accepted
+  `handshake.query.token` in addition to the two documented paths (`auth.token`, `Authorization`
+  header). Query strings land in server/proxy access logs, silently widening the token-leak
+  surface. Removed; only the two documented paths remain.
+- **`typing:stop` never fires on abrupt disconnect** — a peer who disconnects mid-typing (crash,
+  dropped network) left other members' UI stuck showing "typing…" forever. Sockets now track which
+  conversations they've sent an unmatched `typing:start` for (`client.data.typingIn`), and
+  `handleDisconnect` emits `typing:stop` for each of them.
+- **Auth failures swallowed with no logging** — `authenticate()`'s catch-all discarded every
+  exception identically (bad token vs. DB/config outage), with nothing logged, making a real outage
+  indistinguishable from normal invalid-token traffic. Now logs the underlying error via
+  `this.logger.warn` before disconnecting the client.
+- **`.env` S3 credentials were inert** — sitting there as an HTML comment
+  (`<!-- S3 Endpoint: ... -->`) instead of real `KEY=value` lines, so attachment uploads couldn't
+  find them at boot.
+- **Redundant DB re-queries** — `reactToMessage`/`removeReaction`/`editMessage`/`deleteMessage`/
+  `forwardMessage` each called `assertMembership` (which already returns `conversation.members`)
+  and then separately re-queried `listMemberUserIds()` for the same ids again, just for the
+  broadcast; `forwardMessage`'s two independent `assertMembership` calls ran sequentially instead
+  of via `Promise.all`; `addGroupMembers` re-fetched the whole conversation+members after
+  `createMany` purely to reconstruct data already in hand; `safeBroadcast()` was copy-pasted into
+  both `ConversationsService` and `MessagesService` instead of living on `ChatEventsService` once.
+  All fixed — six redundant queries/duplications removed.
+- **Duplicate read receipts under concurrency** — `markConversationRead` did check-then-insert
+  (`findMany` unread → `createMany`) with no unique constraint on `message_reads(message_id,
+  user_id)`. Two concurrent calls (multi-tab, reconnect double-emit) could insert duplicate rows.
+  Reproduced directly against the live DB (3 concurrent calls → 2 duplicate rows), fixed with the
+  `@@unique([message_id, user_id])` constraint plus `createMany({skipDuplicates: true})` (a single
+  INSERT statement, so — unlike `upsert()` below — no separate race to guard against).
+- **`upsert()` on MySQL is not atomic** — it runs a SELECT then an INSERT, so two genuinely
+  concurrent upserts on the same compound-unique key can both miss the row and both attempt to
+  insert; the loser gets a `P2002` unique-constraint error instead of a quiet upsert. Reproduced
+  directly (3 concurrent calls → 1 succeeded, 2 threw) against both the new `markDelivered` and the
+  already-shipped `reactToMessage`. Fixed with atomic `INSERT ... ON DUPLICATE KEY UPDATE` raw SQL,
+  **then explicitly reverted at request** back to plain `upsert()` — see the Changed entry above;
+  the race is real and currently unguarded again, by design.
+- `chat-test.html` — the incoming-call banner was visible on page load: `.incoming-call { display:
+  flex }` was beating the `hidden` attribute in the CSS cascade (author styles win over the UA
+  `[hidden]` rule at equal specificity). Fixed with `.incoming-call[hidden] { display: none }`.
+- `chat-test.html` — `teardownCall()` stopped media tracks/closed peer connections and *then*
+  re-enabled the "Start call" button in one straight sequence; if anything threw during a real
+  camera/`RTCPeerConnection`'s cleanup (more failure modes than a synthetic test stream hits), the
+  button never re-enabled — reproduced live as "Start call stays disabled after cancelling before
+  being answered." Wrapped cleanup in `try/finally` (button always re-evaluated; errors now log to
+  the Event Log panel instead of silently killing the rest of the function) and guarded
+  `pc.onicecandidate`/`pc.ontrack` against firing after the call state is already torn down.
 
 ## [0.0.4] - 2026-08-22
 

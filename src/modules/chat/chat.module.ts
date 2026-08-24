@@ -5,6 +5,7 @@ import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { SettingService } from '../../core/services/setting/setting.service';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { MessagesModule } from '../messages/messages.module';
+import { CallsModule } from '../calls/calls.module';
 import { ChatGateway } from './chat.gateway';
 
 @Module({
@@ -12,6 +13,7 @@ import { ChatGateway } from './chat.gateway';
     JwtModule.register({}),
     ConversationsModule,
     MessagesModule,
+    CallsModule,
     ChatEventsModule,
   ],
   providers: [ChatGateway, PrismaService, SettingService],

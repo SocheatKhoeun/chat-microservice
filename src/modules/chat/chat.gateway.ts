@@ -26,7 +26,12 @@ import { SettingService } from '../../core/services/setting/setting.service';
 import type { AccessTokenPayload } from '../auth/login/login.model';
 import { ConversationsService } from '../conversations/conversations.service';
 import { MessagesService } from '../messages/messages.service';
+import { CallsService } from '../calls/calls.service';
 import {
+  CallActionDto,
+  CallIceCandidateDto,
+  CallInviteDto,
+  CallSignalDto,
   JoinConversationDto,
   ListMessagesWsDto,
   MarkReadDto,
@@ -37,7 +42,6 @@ import {
 interface SocketData {
   user?: users;
   authenticated?: Promise<void>;
-  /** conversation hashes this socket has an outstanding typing:start for, with no typing:stop yet */
   typingIn?: Set<string>;
 }
 
@@ -75,6 +79,7 @@ export class ChatGateway
     private readonly prismaService: PrismaService,
     private readonly messagesService: MessagesService,
     private readonly conversationsService: ConversationsService,
+    private readonly callsService: CallsService,
     private readonly chatEventsService: ChatEventsService,
   ) {}
 
@@ -328,6 +333,82 @@ export class ChatGateway
         dto.conversation_hash,
         dto,
       );
+    });
+  }
+
+  @SubscribeMessage('call:invite')
+  async onCallInvite(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallInviteDto, body);
+      return this.callsService.initiateCall(
+        user.id,
+        dto.conversation_hash,
+        dto.type,
+      );
+    });
+  }
+
+  @SubscribeMessage('call:ring')
+  async onCallRing(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallActionDto, body);
+      return this.callsService.ring(user.id, dto.call_hash);
+    });
+  }
+
+  @SubscribeMessage('call:answer')
+  async onCallAnswer(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallSignalDto, body);
+      return this.callsService.answer(user.id, dto.call_hash, dto.signal);
+    });
+  }
+
+  @SubscribeMessage('call:reject')
+  async onCallReject(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallActionDto, body);
+      return this.callsService.reject(user.id, dto.call_hash);
+    });
+  }
+
+  @SubscribeMessage('call:ice-candidate')
+  async onCallIceCandidate(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck<{ call_hash: string }>> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallIceCandidateDto, body);
+      await this.callsService.relayIceCandidate(
+        user.id,
+        dto.call_hash,
+        dto.target_user_id,
+        dto.signal,
+      );
+      return { call_hash: dto.call_hash };
+    });
+  }
+
+  @SubscribeMessage('call:end')
+  async onCallEnd(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallActionDto, body);
+      return this.callsService.endCall(user.id, dto.call_hash);
     });
   }
 
