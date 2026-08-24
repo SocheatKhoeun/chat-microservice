@@ -1,4 +1,10 @@
-import { int, mysqlEnum, mysqlTable, timestamp, varchar } from 'drizzle-orm/mysql-core';
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  timestamp,
+  varchar,
+} from 'drizzle-orm/mysql-core';
 import { calls } from './calls';
 import { users } from './users';
 
@@ -12,7 +18,14 @@ export const callParticipants = mysqlTable('call_participants', {
     .references(() => users.id),
   joined_at: timestamp('joined_at').defaultNow().notNull(),
   left_at: timestamp('left_at'),
-  status: mysqlEnum('status', ['invited', 'ringing', 'joined', 'left', 'rejected', 'missed']),
+  status: mysqlEnum('status', [
+    'invited',
+    'ringing',
+    'joined',
+    'left',
+    'rejected',
+    'missed',
+  ]),
   created_at: timestamp('created_at').defaultNow().notNull(),
   updated_at: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
 });

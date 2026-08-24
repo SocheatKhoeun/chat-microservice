@@ -25,6 +25,7 @@ import {
   EditMessageDto,
   ForwardMessageDto,
   ListMessagesQueryDto,
+  MessageDeliveryDto,
   MessageListResponseDto,
   MessageReactionDto,
   MessageResponseDto,
@@ -116,6 +117,24 @@ export class MessagesController {
       conversationHash,
       messageHash,
       dto,
+    );
+  }
+
+  @Post(':conversation_hash/:message_hash/delivered')
+  @ApiOperation({
+    summary:
+      "Ack that this message reached you (Messenger's single-check ✓). Idempotent.",
+  })
+  @ApiOkResponse({ type: MessageDeliveryDto })
+  markDelivered(
+    @Req() req: any,
+    @Param('conversation_hash') conversationHash: string,
+    @Param('message_hash') messageHash: string,
+  ) {
+    return this.messagesService.markDelivered(
+      req.user.id,
+      conversationHash,
+      messageHash,
     );
   }
 

@@ -1,4 +1,10 @@
-import { int, mysqlEnum, mysqlTable, timestamp, varchar } from 'drizzle-orm/mysql-core';
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  timestamp,
+  varchar,
+} from 'drizzle-orm/mysql-core';
 import { users } from './users';
 
 export const conversations = mysqlTable('conversations', {

@@ -1,5 +1,3 @@
-Loaded Prisma config from prisma.config.ts.
-
 -- CreateTable
 CREATE TABLE `settings` (
     `id` INTEGER UNSIGNED NOT NULL AUTO_INCREMENT,

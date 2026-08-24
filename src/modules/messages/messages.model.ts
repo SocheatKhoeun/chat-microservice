@@ -15,7 +15,9 @@ import {
 } from 'class-validator';
 import type {
   message_attachments,
+  message_deliveries,
   message_reactions,
+  message_reads,
   messages,
 } from '../../../generated/prisma/client';
 import { attachment_type, message_type } from '../../../generated/prisma/enums';
@@ -79,6 +81,42 @@ export class MessageReactionDto implements Pick<
     this.user_id = reaction.user_id;
     this.reaction = reaction.reaction;
     this.created_at = reaction.created_at;
+  }
+}
+
+export class MessageReadDto implements Pick<
+  message_reads,
+  'user_id' | 'read_at'
+> {
+  @ApiProperty({
+    description: "The reading user's unique identifier in the calling system.",
+  })
+  user_id: string;
+
+  @ApiProperty({ description: 'When they read this message.' })
+  read_at: Date;
+
+  constructor(read: Pick<message_reads, 'user_id' | 'read_at'>) {
+    this.user_id = read.user_id;
+    this.read_at = read.read_at;
+  }
+}
+
+export class MessageDeliveryDto implements Pick<
+  message_deliveries,
+  'user_id' | 'delivered_at'
+> {
+  @ApiProperty({
+    description: "The recipient's unique identifier in the calling system.",
+  })
+  user_id: string;
+
+  @ApiProperty({ description: 'When this message was delivered to them.' })
+  delivered_at: Date;
+
+  constructor(delivery: Pick<message_deliveries, 'user_id' | 'delivered_at'>) {
+    this.user_id = delivery.user_id;
+    this.delivered_at = delivery.delivered_at;
   }
 }
 
@@ -242,6 +280,8 @@ type MessageInput = Pick<
   > | null;
   attachments?: Pick<message_attachments, 'id' | 'file_url' | 'file_type'>[];
   reactions?: Pick<message_reactions, 'user_id' | 'reaction' | 'created_at'>[];
+  reads?: Pick<message_reads, 'user_id' | 'read_at'>[];
+  deliveries?: Pick<message_deliveries, 'user_id' | 'delivered_at'>[];
 };
 
 export class MessageResponseDto implements Pick<
@@ -321,6 +361,19 @@ export class MessageResponseDto implements Pick<
   @ApiProperty({ type: [MessageReactionDto] })
   reactions: MessageReactionDto[];
 
+  @ApiProperty({
+    description: 'Who has read this message ("seen by").',
+    type: [MessageReadDto],
+  })
+  reads: MessageReadDto[];
+
+  @ApiProperty({
+    description:
+      "Who this message has been delivered to (reached their device, whether or not they've read it yet).",
+    type: [MessageDeliveryDto],
+  })
+  deliveries: MessageDeliveryDto[];
+
   constructor(message: MessageInput) {
     this.id = message.id;
     this.hash = message.hash;
@@ -339,6 +392,10 @@ export class MessageResponseDto implements Pick<
     );
     this.reactions = (message.reactions ?? []).map(
       (reaction) => new MessageReactionDto(reaction),
+    );
+    this.reads = (message.reads ?? []).map((read) => new MessageReadDto(read));
+    this.deliveries = (message.deliveries ?? []).map(
+      (delivery) => new MessageDeliveryDto(delivery),
     );
   }
 }

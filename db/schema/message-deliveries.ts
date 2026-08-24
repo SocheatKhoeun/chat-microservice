@@ -8,21 +8,20 @@ import {
 import { messages } from './messages';
 import { users } from './users';
 
-export const messageReactions = mysqlTable(
-  'message_reactions',
+export const messageDeliveries = mysqlTable(
+  'message_deliveries',
   {
     id: int('id').autoincrement().primaryKey(),
-    hash: varchar('hash', { length: 255 }).unique(),
     message_id: int('message_id')
       .notNull()
       .references(() => messages.id),
     user_id: varchar('user_id', { length: 255 })
       .notNull()
       .references(() => users.id),
-    reaction: varchar('reaction', { length: 255 }).notNull(),
+    delivered_at: timestamp('delivered_at').defaultNow().notNull(),
     created_at: timestamp('created_at').defaultNow().notNull(),
     updated_at: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
   },
-  // One reaction per user per message — reacting again replaces it (upsert).
+  // One delivery record per user per message — first ack wins.
   (table) => [unique().on(table.message_id, table.user_id)],
 );

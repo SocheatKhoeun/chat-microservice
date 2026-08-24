@@ -16,6 +16,7 @@ import {
 import type {
   conversation_members,
   conversations,
+  users,
 } from '../../../generated/prisma/client';
 import {
   conversation_member_role,
@@ -290,16 +291,25 @@ export class GroupMemberDto implements Pick<
   @ApiProperty({ description: 'When they joined the conversation.' })
   joined_at: Date;
 
+  @ApiPropertyOptional({
+    description:
+      'When they were last online, if known and not currently online. Null if never tracked (e.g. never gone offline yet) or unavailable for this response.',
+    type: Date,
+    nullable: true,
+  })
+  last_seen_at: Date | null;
+
   constructor(
     member: Pick<
       conversation_members,
       'user_id' | 'role' | 'nickname' | 'joined_at'
-    >,
+    > & { user?: Pick<users, 'last_seen_at'> | null },
   ) {
     this.user_id = member.user_id;
     this.role = member.role;
     this.nickname = member.nickname;
     this.joined_at = member.joined_at;
+    this.last_seen_at = member.user?.last_seen_at ?? null;
   }
 }
 

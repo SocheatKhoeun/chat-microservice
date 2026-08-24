@@ -148,7 +148,24 @@ export class ChatGateway
     const count = (this.onlineSocketCounts.get(userId) ?? 1) - 1;
     if (count <= 0) {
       this.onlineSocketCounts.delete(userId);
-      await this.broadcastPresence(userId, 'presence:offline');
+
+      // Best-effort: record "last seen" the moment they go fully offline (no
+      // sockets left). A failure here shouldn't stop the presence broadcast.
+      let lastSeenAt: Date | null = null;
+      try {
+        const updated = await this.prismaService.users.update({
+          where: { id: userId },
+          data: { last_seen_at: new Date() },
+          select: { last_seen_at: true },
+        });
+        lastSeenAt = updated.last_seen_at;
+      } catch (error) {
+        this.logger.warn(
+          `Failed to record last_seen_at for ${userId}: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+
+      await this.broadcastPresence(userId, 'presence:offline', lastSeenAt);
     } else {
       this.onlineSocketCounts.set(userId, count);
     }
@@ -157,10 +174,14 @@ export class ChatGateway
   private async broadcastPresence(
     userId: string,
     event: 'presence:online' | 'presence:offline',
+    lastSeenAt?: Date | null,
   ): Promise<void> {
     const contactIds =
       await this.conversationsService.listContactUserIds(userId);
-    this.chatEventsService.notifyUsers(contactIds, event, { user_id: userId });
+    this.chatEventsService.notifyUsers(contactIds, event, {
+      user_id: userId,
+      ...(lastSeenAt !== undefined ? { last_seen_at: lastSeenAt } : {}),
+    });
   }
 
   @SubscribeMessage('conversation:join')

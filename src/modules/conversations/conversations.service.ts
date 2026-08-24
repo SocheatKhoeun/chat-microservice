@@ -28,7 +28,7 @@ import {
 } from './conversations.model';
 
 type ConversationWithMembers = Prisma.conversationsGetPayload<{
-  include: { members: true };
+  include: { members: { include: { user: true } } };
 }>;
 
 @Injectable()
@@ -213,7 +213,7 @@ export class ConversationsService {
   async assertMembership(conversationHash: string, userId: string) {
     const conversation = await this.prismaService.conversations.findUnique({
       where: { hash: conversationHash },
-      include: { members: true },
+      include: { members: { include: { user: true } } },
     });
 
     if (!conversation)
@@ -277,7 +277,7 @@ export class ConversationsService {
 
       return tx.conversations.findUniqueOrThrow({
         where: { id: created.id },
-        include: { members: true },
+        include: { members: { include: { user: true } } },
       });
     });
 
@@ -311,7 +311,7 @@ export class ConversationsService {
           : {}),
         ...(dto.avatar_url !== undefined ? { avatar_url: dto.avatar_url } : {}),
       },
-      include: { members: true },
+      include: { members: { include: { user: true } } },
     });
 
     const response = new GroupConversationResponseDto(updated);
@@ -377,9 +377,6 @@ export class ConversationsService {
       })),
     });
 
-    // Build the result from what we already know instead of re-fetching the
-    // whole conversation+members: the pre-existing active members (already
-    // loaded by assertMembership) plus the rows just inserted above.
     const existingMembers = conversation.members
       .filter((member) => !member.left_at)
       .map((member) => new GroupMemberDto(member));
@@ -509,6 +506,7 @@ export class ConversationsService {
     const updated = await this.prismaService.conversation_members.update({
       where: { id: targetMember.id },
       data: { role: dto.role },
+      include: { user: true },
     });
 
     this.chatEventsService.safeBroadcast(() =>

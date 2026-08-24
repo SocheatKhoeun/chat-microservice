@@ -50,6 +50,7 @@ model oauth_client_grant_types {
 model users {
   id              String @id @db.VarChar(255)
   oauth_client_id Int?
+  last_seen_at    DateTime?
 
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
@@ -60,6 +61,7 @@ model users {
   sent_messages         messages[]
   message_reactions     message_reactions[]
   message_reads         message_reads[]
+  message_deliveries    message_deliveries[]
   calls                 calls[]
   call_participants     call_participants[]
 
@@ -124,6 +126,7 @@ model messages {
   replies         messages[]            @relation("MessageReplies")
   reactions       message_reactions[]
   reads           message_reads[]
+  deliveries      message_deliveries[]
   attachments     message_attachments[]
 
   @@map("messages")
@@ -157,7 +160,31 @@ model message_reads {
   message messages @relation(fields: [message_id], references: [id])
   user    users    @relation(fields: [user_id], references: [id])
 
+  // Closes the long-open "duplicate read receipts under concurrency" QA
+  // finding: markConversationRead's check-then-insert had no constraint
+  // backing it, so two concurrent calls (multi-tab, reconnect double-emit)
+  // could both pass the "unread" check and both insert. Empirically
+  // reproduced against the live DB while building message_deliveries above.
+  @@unique([message_id, user_id])
   @@map("message_reads")
+}
+
+model message_deliveries {
+  id           Int      @id @default(autoincrement())
+  message_id   Int
+  user_id      String   @db.VarChar(255)
+  delivered_at DateTime @default(now())
+
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  message messages @relation(fields: [message_id], references: [id])
+  user    users    @relation(fields: [user_id], references: [id])
+
+  // One delivery record per user per message — mirrors message_reactions'
+  // race-free upsert pattern rather than message_reads' known duplicate-row gap.
+  @@unique([message_id, user_id])
+  @@map("message_deliveries")
 }
 
 model message_attachments {

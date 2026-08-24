@@ -19,9 +19,20 @@ export const messages = mysqlTable('messages', {
   sender_id: varchar('sender_id', { length: 255 })
     .notNull()
     .references(() => users.id),
-  type: mysqlEnum('type', ['text', 'image', 'video', 'audio', 'file', 'system']),
+  type: mysqlEnum('type', [
+    'text',
+    'image',
+    'video',
+    'audio',
+    'file',
+    'system',
+  ]),
   content: text('content'),
-  replied_message_id: int('replied_message_id').references((): AnyMySqlColumn => messages.id),
+  replied_message_id: int('replied_message_id').references(
+    (): AnyMySqlColumn => messages.id,
+  ),
+  edited_at: timestamp('edited_at'),
+  deleted_at: timestamp('deleted_at'),
   created_at: timestamp('created_at').defaultNow().notNull(),
   updated_at: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
 });

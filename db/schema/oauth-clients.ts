@@ -1,4 +1,10 @@
-import { boolean, int, mysqlTable, timestamp, varchar } from 'drizzle-orm/mysql-core';
+import {
+  boolean,
+  int,
+  mysqlTable,
+  timestamp,
+  varchar,
+} from 'drizzle-orm/mysql-core';
 import { oauthClientGrantTypes } from './oauth-client-grant-types';
 
 export const oauthClients = mysqlTable('oauth_clients', {

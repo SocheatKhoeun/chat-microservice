@@ -7,7 +7,6 @@ import {
 import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
-import type { Prisma } from '../../../generated/prisma/client';
 import { message_type } from '../../../generated/prisma/enums';
 import { ConversationsService } from '../conversations/conversations.service';
 import {
@@ -15,28 +14,13 @@ import {
   ForwardMessageDto,
   ListMessagesQueryDto,
   MarkReadResultDto,
+  MessageDeliveryDto,
   MessageListResponseDto,
   MessageReactionDto,
   MessageResponseDto,
   ReactToMessageDto,
   SendMessageDto,
 } from './messages.model';
-
-const messageInclude = {
-  replied_message: true,
-  attachments: true,
-  reactions: true,
-} satisfies Prisma.messagesInclude;
-
-type MessageWithRelations = Prisma.messagesGetPayload<{
-  include: typeof messageInclude;
-}>;
-
-/** The subset of a Prisma `conversations` payload every broadcast helper below actually needs. */
-interface ConversationMembership {
-  hash: string;
-  members: { user_id: string; left_at: Date | null }[];
-}
 
 @Injectable()
 export class MessagesService {
@@ -80,7 +64,13 @@ export class MessagesService {
             }
           : undefined,
       },
-      include: messageInclude,
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
     });
 
     return new MessageResponseDto(created);
@@ -111,6 +101,15 @@ export class MessagesService {
           message_id: id,
           user_id: currentUserId,
         })),
+        skipDuplicates: true,
+      });
+
+      await this.prismaService.message_deliveries.createMany({
+        data: unreadMessages.map(({ id }) => ({
+          message_id: id,
+          user_id: currentUserId,
+        })),
+        skipDuplicates: true,
       });
     }
 
@@ -141,7 +140,13 @@ export class MessagesService {
         conversation_id: conversation.id,
         ...(query.cursor ? { id: { lt: query.cursor } } : {}),
       },
-      include: messageInclude,
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
       orderBy: { id: 'desc' },
       take: limit,
     });
@@ -171,8 +176,6 @@ export class MessagesService {
         'Cannot react to a deleted message!||មិនអាចធ្វើប្រតិកម្មចំពោះសារដែលបានលុបទេ!',
       );
 
-    // Compound-unique upsert: a second reaction from the same user on the same
-    // message replaces the first, atomically — no read-then-write race.
     const reaction = await this.prismaService.message_reactions.upsert({
       where: {
         message_id_user_id: { message_id: message.id, user_id: currentUserId },
@@ -220,6 +223,34 @@ export class MessagesService {
     });
   }
 
+  async markDelivered(
+    currentUserId: string,
+    conversationHash: string,
+    messageHash: string,
+  ): Promise<MessageDeliveryDto> {
+    const conversation = await this.conversationsService.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+    const message = await this.getOwnedMessage(conversation.id, messageHash);
+    const delivery = await this.prismaService.message_deliveries.upsert({
+      where: {
+        message_id_user_id: { message_id: message.id, user_id: currentUserId },
+      },
+      update: {},
+      create: { message_id: message.id, user_id: currentUserId },
+    });
+
+    this.broadcastToConversation(conversation, 'message:delivered', {
+      conversation_hash: conversationHash,
+      message_hash: messageHash,
+      user_id: currentUserId,
+      delivered_at: delivery.delivered_at,
+    });
+
+    return new MessageDeliveryDto(delivery);
+  }
+
   async editMessage(
     currentUserId: string,
     conversationHash: string,
@@ -244,7 +275,13 @@ export class MessagesService {
     const updated = await this.prismaService.messages.update({
       where: { id: message.id },
       data: { content: dto.content, edited_at: new Date() },
-      include: messageInclude,
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
     });
 
     const response = new MessageResponseDto(updated);
@@ -292,8 +329,6 @@ export class MessagesService {
     messageHash: string,
     dto: ForwardMessageDto,
   ): Promise<MessageResponseDto> {
-    // Two independent membership checks — run them concurrently rather than
-    // paying for two sequential round trips.
     const [sourceConversation, targetConversation] = await Promise.all([
       this.conversationsService.assertMembership(
         sourceConversationHash,
@@ -331,7 +366,13 @@ export class MessagesService {
             }
           : undefined,
       },
-      include: messageInclude,
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
     });
 
     const response = new MessageResponseDto(created);
@@ -340,14 +381,16 @@ export class MessagesService {
     return response;
   }
 
-  /** Fetches a message and confirms it belongs to the given conversation, 404ing otherwise. */
-  private async getOwnedMessage(
-    conversationId: number,
-    messageHash: string,
-  ): Promise<MessageWithRelations> {
+  private async getOwnedMessage(conversationId: number, messageHash: string) {
     const message = await this.prismaService.messages.findUnique({
       where: { hash: messageHash },
-      include: messageInclude,
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
     });
 
     if (!message || message.conversation_id !== conversationId)
@@ -374,19 +417,19 @@ export class MessagesService {
     return message;
   }
 
-  private activeMemberIds(conversation: ConversationMembership): string[] {
+  private activeMemberIds(conversation: {
+    members: { user_id: string; left_at: Date | null }[];
+  }): string[] {
     return conversation.members
       .filter((member) => !member.left_at)
       .map((member) => member.user_id);
   }
 
-  /**
-   * Broadcasts to a conversation using member ids already in hand (from
-   * assertMembership, moments earlier in the same request) instead of
-   * re-querying them — see the "Redundant member re-query" QA finding.
-   */
   private broadcastToConversation(
-    conversation: ConversationMembership,
+    conversation: {
+      hash: string;
+      members: { user_id: string; left_at: Date | null }[];
+    },
     event: string,
     payload: unknown,
   ): void {
