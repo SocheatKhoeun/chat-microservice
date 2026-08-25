@@ -5,11 +5,17 @@ import { SettingService } from '../../core/services/setting/setting.service';
 import { ChatEventsModule } from '../../common/services/chat-events/chat-events.module';
 import { OauthJwtGuard } from '../../common/guards/oauth-jwt/oauth-jwt.guard';
 import { ConversationsModule } from '../conversations/conversations.module';
+import { BlocksModule } from '../blocks/blocks.module';
 import { MessagesController } from './messages.controller';
 import { MessagesService } from './messages.service';
 
 @Module({
-  imports: [JwtModule.register({}), ConversationsModule, ChatEventsModule],
+  imports: [
+    JwtModule.register({}),
+    ConversationsModule,
+    ChatEventsModule,
+    BlocksModule,
+  ],
   controllers: [MessagesController],
   providers: [MessagesService, PrismaService, SettingService, OauthJwtGuard],
   exports: [MessagesService],

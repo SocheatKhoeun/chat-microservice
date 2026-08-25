@@ -191,6 +191,46 @@
     reverted — every step after inviting (`ring`/`answer`/`reject`/`ice-candidate`/`end`) still
     requires a live WS connection anyway, so starting over WS too keeps the whole lifecycle on one
     transport. Starting a call is WS-only (`call:invite`), same as the rest of it.
+- **Conversation organization**:
+  - Mute/archive/pin a *conversation* — `conversation_members` gets `is_muted`/`is_archived`/
+    `is_pinned`/`pinned_at`. `PATCH /v1/conversations/:hash/settings` (partial update) writes the
+    caller's own membership row; broadcasts `conversation:settings_updated` to the caller's other
+    devices only. `GET /v1/conversations` gets an `archived` query flag (default `false`) and every
+    item now carries the four fields above plus `unread_count`; the response also carries
+    `total_unread_conversations` (how many non-archived conversations have ≥1 unread message — the
+    app-icon-badge number). Pinned conversations sort first within a page; exact ordering isn't
+    guaranteed past page 1 for a user with more pinned conversations than one page holds.
+  - Block/unblock a user — new `blocked_users` table (`@@unique([blocker_id, blocked_id])`) and
+    `src/modules/blocks/` (`BlocksModule`). `POST`/`DELETE /v1/users/:user_id/block`,
+    `GET /v1/users/blocked`. Gates **direct** messaging only (checked either-direction) — starting a
+    direct conversation and sending into an existing one both `403` while either party has blocked
+    the other; a shared group is unaffected. Only the blocker gets a `user:blocked` WS notify
+    (multi-device sync) — the blocked party is never told.
+  - Search messages — `GET /v1/conversations/:hash/search?q=` (one conversation) and
+    `GET /v1/conversations/messages/search?q=` (every conversation the caller belongs to), both
+    cursor-paginated like message history. Plain `content LIKE %q%`; excludes soft-deleted messages.
+  - `prisma/migrations/20260825060000_add_conversation_settings_and_blocked_users/`.
+- **Group ownership transfer** — if the owner leaves a group via self-removal,
+  `ConversationsService#removeGroupMember` now promotes a successor in the same transaction as the
+  `left_at` update: the longest-tenured (earliest-`joined_at`) admin, else the longest-tenured plain
+  member, else no promotion (a one-member group has no one left to promote). Guarded on "no
+  remaining owner among the others" rather than just "the departing member was owner", since
+  `updateMemberRole` can promote a second person to owner without demoting the first. Broadcasts the
+  existing `member:role_updated` event for the promoted member — no new WS event needed. No
+  migration.
+- **Pin/unpin an individual message** within a conversation — distinct from the conversation-level
+  pin above (that pins a *conversation* to the top of the inbox; this pins one *message* within a
+  conversation). `messages` gets `is_pinned`/`pinned_at`/`pinned_by` (a second FK to `users`,
+  alongside the existing `sender_id` one — both relations now explicitly named,
+  `"MessageSender"`/`"MessagePinner"`, since Prisma can't disambiguate two unnamed relations between
+  the same two models). `POST`/`DELETE /v1/conversations/:hash/:message_hash/pin` — any active
+  conversation member can pin/unpin (not sender/admin-only, matching how reactions already work);
+  re-pinning an already-pinned message updates `pinned_by` to the latest pinner rather than erroring,
+  unpinning an already-unpinned message is a silent no-op. Rejects pinning a deleted message.
+  Broadcasts `message:pinned`/`message:unpinned`. `GET /v1/conversations/:hash/pinned` lists a
+  conversation's pinned messages, most-recently-pinned first, capped at 100 with no cursor
+  pagination (pinned messages are a small "highlights" set by nature, not the full history).
+  `prisma/migrations/20260826060000_add_message_pin/`.
 
 ### Changed
 - **`users.id` is now the external id itself** (`String @id @db.VarChar(255)`) — the separate
@@ -251,6 +291,29 @@
   the raw-SQL/retry version of it was **explicitly removed again at request** — both now use plain
   unprotected `upsert()` calls. The underlying race (see Fixed) is real and reintroduced by this;
   documented here so it isn't mistaken for an oversight.
+- `MessagesService#sendMessage`/`#markConversationRead` now self-broadcast (`message:new`/
+  `message:read`) by reusing the `conversation` object `assertMembership` already returns, matching
+  how `reactToMessage`/`editMessage`/`deleteMessage`/`forwardMessage` already did — they were the two
+  holdouts that instead left broadcasting to `ChatGateway`, which had to separately re-fetch
+  conversation+members to do it. **Real behavior change, not just internal cleanup**: sending a
+  message over **REST** now also broadcasts to the conversation's members over WS, which it never
+  did before (only the WS `message:send` path broadcast). `ChatGateway`'s now-redundant broadcast
+  calls, its private `broadcastToConversation()` helper, and
+  `ConversationsService#listMemberUserIds()` (no callers left once the above was fixed) were
+  removed.
+- A `RateLimiterService` (in-memory sliding window) enforcing a limit on `message:send` — default
+  10 messages/10s per user, both the WS handler and the REST send endpoint funneling through one
+  check in `MessagesService#sendMessage` — was added, verified live, **then removed entirely at
+  explicit request ("no need")**. Nothing of it remains: `src/common/services/rate-limiter/`, the
+  `assertNotRateLimited` method, and the `MESSAGE_RATE_LIMIT*` env vars are all gone. Documented here
+  (and in `TASKS.md`, restated as an open item) so it isn't rebuilt from scratch without knowing it
+  was already tried once.
+- `ChatEventsModule` was briefly marked `@Global()` (so `ConversationsModule`/`MessagesModule`/
+  `BlocksModule`/`CallsModule` wouldn't each need to explicitly import it just to inject
+  `ChatEventsService`) and verified live, then **reverted back to explicit per-module imports**
+  shortly after. `ChatEventsService` genuinely does need to stay a true singleton — it holds the
+  Socket.IO `Server` instance set by `ChatGateway.afterInit()`, and every other module's broadcast
+  calls depend on getting that same instance, not a separate module-scoped one.
 
 ### Removed
 - `ws-test.js` and `ws-client.js` (root-level Node CLI testers for the WebSocket API — one
@@ -331,6 +394,22 @@
   being answered." Wrapped cleanup in `try/finally` (button always re-evaluated; errors now log to
   the Event Log panel instead of silently killing the rest of the function) and guarded
   `pc.onicecandidate`/`pc.ontrack` against firing after the call state is already torn down.
+- **Duplicate direct conversations under concurrency** — the old find-or-create for a direct
+  conversation had no unique constraint backing the (type=direct, member-pair) combination, so two
+  near-simultaneous `startDirectConversation` calls between the same pair could create two separate
+  conversations. New `conversations.direct_key` — a deterministic, order-independent SHA-256 hash of
+  the sorted pair of user ids (`directConversationKey()`), unique-indexed, `null` for `group`
+  conversations. `startDirectConversation` now resolves via `upsert()` on `direct_key`, catching and
+  retrying on the P2002 conflict from MySQL's non-atomic `upsert()` (same pattern as
+  `BlocksService#blockUser`). Also added `@@unique([conversation_id, user_id])` on
+  `conversation_members` (nothing previously stopped a user getting two membership rows in one
+  conversation) so the member insert can safely use `createMany({skipDuplicates: true})`.
+  `prisma/migrations/20260825140000_add_direct_conversation_key/` and
+  `..._add_direct_conversation_key_unique_index/` (split in two so the unique index could be added
+  only after backfilling every pre-existing direct conversation's `direct_key` via the app's own
+  `directConversationKey()` util, not raw SQL — MySQL's `_ci` collation sorts case-insensitively
+  while JS's `.sort()` doesn't, so a raw-SQL backfill risked computing a different hash than the app
+  would at lookup time for some ids).
 
 ## [0.0.4] - 2026-08-22
 

@@ -1,5 +1,6 @@
 import {
   AnyMySqlColumn,
+  boolean,
   int,
   mysqlEnum,
   mysqlTable,
@@ -33,6 +34,9 @@ export const messages = mysqlTable('messages', {
   ),
   edited_at: timestamp('edited_at'),
   deleted_at: timestamp('deleted_at'),
+  is_pinned: boolean('is_pinned').default(false).notNull(),
+  pinned_at: timestamp('pinned_at'),
+  pinned_by: varchar('pinned_by', { length: 255 }).references(() => users.id),
   created_at: timestamp('created_at').defaultNow().notNull(),
   updated_at: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
 });

@@ -208,6 +208,35 @@ export class ListMessagesQueryDto {
   limit?: number;
 }
 
+export class SearchMessagesQueryDto {
+  @ApiProperty({ description: 'Text to search for in message content.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  q!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Return messages older than this message id (cursor-based pagination).',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  cursor?: number;
+
+  @ApiPropertyOptional({
+    description: 'Max number of messages to return.',
+    default: 20,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}
+
 export class RepliedMessageDto implements Pick<
   messages,
   'id' | 'hash' | 'sender_id' | 'type' | 'content' | 'created_at'
@@ -273,6 +302,9 @@ type MessageInput = Pick<
   | 'replied_message_id'
   | 'edited_at'
   | 'deleted_at'
+  | 'is_pinned'
+  | 'pinned_at'
+  | 'pinned_by'
 > & {
   replied_message?: Pick<
     messages,
@@ -295,6 +327,9 @@ export class MessageResponseDto implements Pick<
   | 'replied_message_id'
   | 'edited_at'
   | 'deleted_at'
+  | 'is_pinned'
+  | 'pinned_at'
+  | 'pinned_by'
 > {
   @ApiProperty({ description: 'The internal id of the message.' })
   id: number;
@@ -374,6 +409,26 @@ export class MessageResponseDto implements Pick<
   })
   deliveries: MessageDeliveryDto[];
 
+  @ApiProperty({
+    description:
+      'Whether this message is pinned in its conversation. Distinct from pinning a *conversation* to the top of the inbox.',
+  })
+  is_pinned: boolean;
+
+  @ApiPropertyOptional({
+    description: 'When this message was pinned, if it is.',
+    type: Date,
+    nullable: true,
+  })
+  pinned_at: Date | null;
+
+  @ApiPropertyOptional({
+    description: "Who pinned this message, if it's pinned.",
+    type: String,
+    nullable: true,
+  })
+  pinned_by: string | null;
+
   constructor(message: MessageInput) {
     this.id = message.id;
     this.hash = message.hash;
@@ -397,6 +452,9 @@ export class MessageResponseDto implements Pick<
     this.deliveries = (message.deliveries ?? []).map(
       (delivery) => new MessageDeliveryDto(delivery),
     );
+    this.is_pinned = message.is_pinned;
+    this.pinned_at = message.pinned_at;
+    this.pinned_by = message.pinned_by;
   }
 }
 

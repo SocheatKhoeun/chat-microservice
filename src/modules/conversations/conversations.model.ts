@@ -1,9 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -118,6 +119,18 @@ export class ListConversationsQueryDto {
   @Min(1)
   @Max(100)
   take?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'List archived conversations instead of the normal (non-archived) inbox. Default false.',
+    default: false,
+  })
+  @IsOptional()
+  // Query strings arrive as "true"/"false" — `Boolean("false")` is `true`,
+  // so a plain @Type(() => Boolean) would treat ?archived=false as truthy.
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  archived?: boolean;
 }
 
 export class ConversationListItemDto implements Pick<
@@ -154,6 +167,20 @@ export class ConversationListItemDto implements Pick<
   })
   last_message: MessageResponseDto | null;
 
+  @ApiProperty({ description: "Whether you've muted this conversation." })
+  is_muted: boolean;
+
+  @ApiProperty({ description: "Whether you've archived this conversation." })
+  is_archived: boolean;
+
+  @ApiProperty({ description: "Whether you've pinned this conversation." })
+  is_pinned: boolean;
+
+  @ApiProperty({
+    description: 'How many messages in this conversation you have not read.',
+  })
+  unread_count: number;
+
   constructor(input: {
     id: number;
     hash: string;
@@ -162,6 +189,10 @@ export class ConversationListItemDto implements Pick<
     updated_at: Date;
     sender_id: string | null;
     last_message: ConstructorParameters<typeof MessageResponseDto>[0] | null;
+    is_muted: boolean;
+    is_archived: boolean;
+    is_pinned: boolean;
+    unread_count: number;
   }) {
     this.id = input.id;
     this.hash = input.hash;
@@ -172,6 +203,10 @@ export class ConversationListItemDto implements Pick<
     this.last_message = input.last_message
       ? new MessageResponseDto(input.last_message)
       : null;
+    this.is_muted = input.is_muted;
+    this.is_archived = input.is_archived;
+    this.is_pinned = input.is_pinned;
+    this.unread_count = input.unread_count;
   }
 }
 
@@ -187,12 +222,77 @@ export class ConversationListResponseDto {
   })
   next_cursor: number | null;
 
+  @ApiProperty({
+    description:
+      'How many non-archived conversations have unread messages — the app-icon badge count, not a raw message tally.',
+  })
+  total_unread_conversations: number;
+
   constructor(input: {
     data: ConversationListItemDto[];
     next_cursor: number | null;
+    total_unread_conversations: number;
   }) {
     this.data = input.data;
     this.next_cursor = input.next_cursor;
+    this.total_unread_conversations = input.total_unread_conversations;
+  }
+}
+
+export class UpdateConversationSettingsDto {
+  @ApiPropertyOptional({ description: 'Mute or unmute this conversation.' })
+  @IsOptional()
+  @IsBoolean()
+  is_muted?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Archive or unarchive this conversation (hides it from the default inbox).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  is_archived?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Pin or unpin this conversation to the top of your inbox.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  is_pinned?: boolean;
+}
+
+export class ConversationSettingsDto {
+  @ApiProperty({ description: 'The conversation these settings apply to.' })
+  conversation_hash: string;
+
+  @ApiProperty()
+  is_muted: boolean;
+
+  @ApiProperty()
+  is_archived: boolean;
+
+  @ApiProperty()
+  is_pinned: boolean;
+
+  @ApiPropertyOptional({
+    description: 'When this conversation was pinned, if it is.',
+    type: Date,
+    nullable: true,
+  })
+  pinned_at: Date | null;
+
+  constructor(input: {
+    conversation_hash: string;
+    is_muted: boolean;
+    is_archived: boolean;
+    is_pinned: boolean;
+    pinned_at: Date | null;
+  }) {
+    this.conversation_hash = input.conversation_hash;
+    this.is_muted = input.is_muted;
+    this.is_archived = input.is_archived;
+    this.is_pinned = input.is_pinned;
+    this.pinned_at = input.pinned_at;
   }
 }
 

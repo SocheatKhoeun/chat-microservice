@@ -76,22 +76,123 @@ Status legend: `[ ]` open · `[x]` done
   duplication this item flagged is back by design; noted here so it isn't
   "rediscovered" as a surprise later.
 
-- [ ] **Redundant member re-query on every broadcast** — `broadcastToConversation`
-  re-fetches conversation+members on every `message:send`/`message:read` even
-  though `assertMembership` just fetched the same data moments earlier.
-  Efficiency-only (not a correctness bug) — left open as a lower-priority
-  optimization; would need threading the already-fetched member list through
-  `sendMessage`/`markConversationRead` into the broadcast call.
-  (`chat.gateway.ts`, `conversations.service.ts`)
+- [x] **Redundant member re-query on every broadcast** — **fixed 2026-08-25**.
+  `ChatGateway`'s private `broadcastToConversation()` re-fetched
+  conversation+members via `ConversationsService.listMemberUserIds()` on
+  every `message:send`/`message:read`, even though `assertMembership` had
+  just fetched the exact same data moments earlier inside
+  `MessagesService.sendMessage`/`markConversationRead`. Six other methods on
+  `MessagesService` (`reactToMessage`, `removeReaction`, `markDelivered`,
+  `editMessage`, `deleteMessage`, `forwardMessage` — see the Post-Phase-2
+  hardening entry above) already self-broadcast by reusing the `conversation`
+  object `assertMembership` returns; `sendMessage`/`markConversationRead`
+  were the two holdouts that instead left broadcasting to `ChatGateway`,
+  which is exactly why they needed a second fetch. Fixed by bringing them in
+  line with their siblings: both now call the existing private
+  `MessagesService.broadcastToConversation()` helper themselves, reusing the
+  already-in-hand member list — no new fetch. `ChatGateway`'s now-redundant
+  broadcast calls (and the private helper that only they used) were removed,
+  along with `ConversationsService.listMemberUserIds()` itself once it had
+  no remaining callers anywhere in the codebase.
+  - **A real behavior change worth knowing about, not just an internal
+    optimization**: fixing this the way its siblings were already fixed
+    means `sendMessage` and `markConversationRead` now broadcast regardless
+    of which transport called them — so sending a message over **REST**
+    (`POST /v1/conversations/:hash`) now also broadcasts `message:new` to
+    the conversation's members over WS, which it never did before
+    (broadcasting used to live only in `ChatGateway.onSendMessage`, so a
+    REST-sent message reached the DB but no connected client ever heard
+    about it in real time). Given every other REST-triggered mutation in
+    this codebase already broadcasts (edit, delete, react, forward, group
+    management, block…), this was the odd one out — closing the redundant
+    query and closing that gap turned out to be the same fix, not two.
+  - The `message:read` broadcast payload shape is unchanged
+    (`conversation_hash`, `read_count`, `last_read_message_id`, `user_id`,
+    `read_at`) — built the same way, just from inside the service now
+    instead of the gateway, so no existing client needs to change anything.
+  (`chat.gateway.ts`, `messages.service.ts`, `conversations.service.ts`)
 
-- [ ] **Duplicate direct conversations under concurrency** — the
-  find-or-create for a direct conversation between two users has no unique
-  constraint backing the (type=direct, member-pair) combination, so two
-  near-simultaneous `startDirectConversation` calls between the same pair can
-  create two separate conversations. **Needs a schema-level fix** (a
-  constraint or an application-level lock) — flagged, not applied
-  automatically; let me know if you want the migration.
-  (`conversations.service.ts`, `prisma/schema.prisma`)
+  No migration — pure application-code change.
+
+  **QA — real integration testing against a disposable second app
+  instance**, not just static review: `PORT=3999 node dist/src/main.js`
+  alongside the user's own dev server (never touched), driven with real
+  `socket.io-client` connections (not simulated) plus real HTTP `fetch`
+  calls, disposable test users/conversations cleaned up from the DB
+  afterward. 12 assertions, all passing:
+  - WS `message:send`/`message:read` still ack and broadcast exactly as
+    before (regression check) — a conversation member's socket receives the
+    event, a connected-but-non-member user's socket does not.
+  - **The actual fix, proven live**: a message sent over **REST** now
+    reaches the other member's open WS connection as `message:new` — this
+    would have silently failed (no event, no error) before the fix. A
+    non-member still receives nothing either way.
+  - `message:read`'s broadcast payload was checked field-by-field
+    (`conversation_hash`/`read_count`/`last_read_message_id`/`user_id`/
+    `read_at`, correct types) to confirm no wire-format regression for
+    connected clients.
+
+- [x] **Duplicate direct conversations under concurrency** — **fixed
+  2026-08-25**. The old find-or-create had no constraint backing the
+  (type=direct, member-pair) combination, so two near-simultaneous
+  `startDirectConversation` calls between the same pair could create two
+  separate conversations.
+  - New `conversations.direct_key`: a deterministic, order-independent
+    SHA-256 hash of the sorted pair of user ids
+    (`directConversationKey()`, `src/common/utils/conversation-key.util.ts`),
+    unique-indexed. `null` for `group` conversations (MySQL unique indexes
+    allow multiple `NULL`s, so groups never collide with each other).
+  - `startDirectConversation` now resolves the conversation via a new
+    `findOrCreateDirectConversation()` helper: `upsert()` on `direct_key`,
+    and — since Prisma's `upsert()` is not atomic on MySQL, the same
+    documented class of race as `reactToMessage`/`markDelivered`/`blockUser`
+    — catches the P2002 conflict and retries as a read of what the winner
+    just created (`isUniqueConstraintViolation()`, reused from Phase 5).
+    Deliberately resolved *outside* the transaction that inserts members and
+    sends the opening message — retrying a unique-constraint conflict from
+    inside an explicit transaction is unnecessary complexity here, since
+    that resolution step doesn't need to be atomic with what follows.
+  - Also added `@@unique([conversation_id, user_id])` on
+    `conversation_members` (a real gap on its own — nothing previously
+    stopped a user from getting two membership rows in the same
+    conversation) so the member insert can safely use
+    `createMany({skipDuplicates: true})`: safe no-op when two concurrent
+    calls both resolve to the same conversation, instead of a duplicate
+    membership row.
+  (`conversations.service.ts`, `prisma/schema.prisma`,
+  `src/common/utils/conversation-key.util.ts`)
+
+  **Migrations**:
+  `prisma/migrations/20260825140000_add_direct_conversation_key/` (adds the
+  nullable `direct_key` column — verified 0 existing duplicate
+  `(conversation_id, user_id)` rows and 0 existing duplicate direct-pair
+  conversations against the live DB before writing this, so the
+  `conversation_members` unique constraint could go in the same migration
+  with no dedupe needed first — plus that constraint itself) and
+  `prisma/migrations/20260825140500_add_direct_conversation_key_unique_index/`
+  (the `direct_key` unique index, applied only after backfilling every
+  pre-existing `direct` conversation — 7 of them — via the app's own
+  `directConversationKey()` util in a one-off script, not raw SQL, so the
+  hash is byte-identical to what the app computes at lookup time; a raw-SQL
+  `GROUP_CONCAT`+`SHA2()` backfill was considered and rejected — MySQL's
+  `_ci` collation sorts case-insensitively while JS's `.sort()` doesn't, so
+  the two could disagree on pair order for some id and silently compute a
+  different hash than the app would). Both applied clean via
+  `migrate deploy`.
+
+  **QA — real HTTP integration testing against a disposable second app
+  instance**, not just static review: `PORT=3999 node dist/src/main.js`
+  alongside the user's own dev server (never touched), disposable test
+  users/conversations cleaned up from the DB afterward. Two independent
+  runs, each firing 10 concurrent `startDirectConversation` calls between a
+  brand-new pair that had never talked before — mixing both directions
+  (some A→B, some B→A) to also exercise the order-independence of the key —
+  plus a sequential regression check (calling it twice, and in reverse,
+  reuses the same conversation). Verified directly against the DB after:
+  **exactly one conversation row per pair in both runs**, exactly 2
+  membership rows each (no duplicates from the `skipDuplicates` path), and
+  every message from every concurrent call landed (10/10 and 10/10 — none
+  lost, none orphaned).
 
 ---
 
@@ -421,22 +522,425 @@ of it, is WS-only: `call:invite`.
 build`, `npm test`, and `eslint` (with `--fix` for formatting) all pass
 clean.
 
-### Phase 5 — Conversation organization
-- [ ] Mute / archive / pin a conversation — **needs migration**: per-member settings (e.g. columns on `conversation_members` or a new table)
-- [ ] Block / unblock a user — **needs migration**: new `blocked_users` table
-- [ ] Search messages within a conversation and across conversations
-- [ ] Unread-count badge per conversation (derivable from `message_reads`, cache for perf)
+### Phase 5 — Conversation organization — ✅ done (2026-08-25)
+
+- [x] **Mute / archive / pin a conversation** — `conversation_members` gets
+  `is_muted`/`is_archived`/`is_pinned`/`pinned_at`. `PATCH
+  /v1/conversations/:hash/settings` (partial update — only the fields you
+  pass change) reads/writes the caller's own membership row; broadcasts
+  `conversation:settings_updated` to the caller's other devices only (nobody
+  else needs to know you muted them). `GET /v1/conversations` gets an
+  `archived` query flag (default false — archived conversations are hidden
+  from the normal inbox, matching Messenger) and every item now carries
+  `is_muted`/`is_archived`/`is_pinned`/`unread_count`. Ordering is
+  `[is_pinned desc, id desc]`; the cursor only keys on id, so pinned-first
+  ordering is exact on page 1 but (documented, deliberately not solved with a
+  composite cursor — same category as this file's other flagged edge cases)
+  isn't guaranteed exact past page 1 for a user with more pinned
+  conversations than one page holds.
+- [x] **Block / unblock a user** — new `blocked_users` table
+  (`@@unique([blocker_id, blocked_id])`) and `src/modules/blocks/` module.
+  `POST`/`DELETE /v1/users/:user_id/block`, `GET /v1/users/blocked`.
+  Blocking gates **direct** messaging only (checked either-direction via
+  `BlocksService.assertNotBlocked`) — starting a direct conversation
+  (`ConversationsService.startDirectConversation`) and sending into an
+  existing one (`MessagesService.sendMessage`, direct conversations only) both
+  403 while either party has blocked the other. A shared group is
+  unaffected, matching Messenger (blocking someone doesn't remove mutual
+  groups). Only the blocker gets a `user:blocked` WS notify (multi-device
+  sync) — the blocked party is never told, also matching Messenger.
+  `blockUser` upserts and, on the same MySQL non-atomic-upsert race
+  documented for `reactToMessage`/`markDelivered` (Phase 3), retries as a
+  read on conflict via a new shared `isUniqueConstraintViolation()` helper
+  (`src/common/utils/prisma-error.util.ts` — the helper this file's Phase 3
+  notes described adding for `reactToMessage`/`markDelivered` turned out to
+  not actually be in the codebase when this phase started; not re-litigated
+  here, just noted so it isn't "rediscovered" as a surprise — this phase's
+  own new code uses it correctly from the start).
+- [x] **Search messages** — `GET /v1/conversations/:hash/search?q=` (one
+  conversation) and `GET /v1/conversations/messages/search?q=` (every
+  conversation the caller belongs to), both cursor-paginated like message
+  history. Plain `content LIKE %q%` (MySQL's default collation is
+  case-insensitive, so no explicit case-insensitive mode is needed); excludes
+  soft-deleted messages (`deleted_at: null`). Route ordering was checked
+  deliberately: `search/messages` is a 2-segment literal path, so it can't be
+  shadowed by `GET :conversation_hash` (1 segment) — confirmed via the live
+  route dump at boot (`RouterExplorer`), not just reasoned about.
+- [x] **Unread-count badge** — `unread_count` per conversation (derived from
+  `messages` not-in `message_reads` for the caller, one `groupBy` query for
+  the whole page — no N+1) plus `total_unread_conversations` on the list
+  response: how many non-archived conversations have ≥1 unread message (the
+  app-icon-badge number, not a raw message tally — archived conversations
+  don't count, same as the default inbox excluding them).
+
+**Migration**: `prisma/migrations/20260825060000_add_conversation_settings_and_blocked_users/`
+(adds the four `conversation_members` columns above and the `blocked_users`
+table, `utf8mb4_general_ci` collation matching this DB's real convention).
+**Applied** — `npx prisma migrate deploy` ran clean against the live DB (not
+hand-authored-but-unapplied like earlier phases' migrations sometimes were;
+connectivity was verified with `prisma migrate status` first).
+
+**QA — real HTTP integration testing against a disposable second app
+instance**, not just static review: `PORT=3999 node dist/src/main.js`
+alongside the user's own dev server on 3000 (never touched), driven with a
+throwaway `tsx` script using real `fetch` calls, real JWTs from the actual
+`POST /v1/auth/login` flow, and disposable test users/conversations cleaned
+up from the DB afterward (both directly and via `chat-test.html`'s new
+panel, see below). 39 assertions, all passing:
+- Unread count tracks correctly across sends/reads; pin/mute/archive persist
+  and reflect in `GET /v1/conversations`; archived conversations are excluded
+  from the default list and from `total_unread_conversations`, and reappear
+  under `?archived=true` with their settings intact; a non-member gets 403
+  updating settings.
+- Self-block, blocking a nonexistent user, and idempotent re-block/re-unblock
+  all behave correctly; blocking gates conversation start **and** sending in
+  an already-existing conversation, in **either** direction; unblocking
+  restores messaging; **3 concurrent block calls for the same pair** all
+  resolve 201 with exactly one row (the P2002-retry race fix, verified
+  empirically the same way Phase 3 verified its own concurrency fixes, not
+  just reasoned about).
+- Search finds matches within a conversation and across all of them, excludes
+  a message after it's deleted, 403s a non-member searching a conversation
+  directly, and a user outside a conversation gets no hits for it from the
+  cross-conversation search — confirming membership scoping, not just route
+  reachability.
+
+One real bug caught by this pass and fixed before it was reported as done:
+the initial `ListConversationsQueryDto.archived` query flag used
+`@Type(() => Boolean)`, but `Boolean("false")` is `true` in JS — `?archived=false`
+would have been silently treated as `true`. Fixed with an explicit
+`@Transform` that checks the literal string.
+
+**`chat-test.html`** extended with a "Settings / block / search (Phase 5)"
+panel per pane: mute/archive/pin toggle buttons + a settings status line,
+an inbox loader (with an archived-only checkbox) showing 📌/🔇/🗄 flags and
+unread counts per conversation, block/unblock/list-blocked controls, and a
+search box with separate "this conversation" / "all conversations" buttons.
+Verified live in Chrome against the disposable instance above (not just
+`node --check` on the extracted script): logged in two real users, started a
+direct conversation, confirmed the WS-delivered `conversation_started`
+system message, then clicked through mute → pin → refresh (status line
+updated correctly), load inbox (showed the right flags/unread count), sent a
+message and found it via both search modes, blocked → listed → unblocked a
+user, and confirmed a clean browser console throughout (no errors — the only
+console output was from an unrelated MetaMask extension, not this page).
+
+**Verification**: `npx tsc --noEmit`, `npx nest build`, `npm test`,
+`eslint`, and `prisma validate` all pass clean.
 
 ### Phase 6 — Delivery & scale
-- [ ] Push notifications (FCM/APNs) when the recipient is offline — hook into `broadcastToConversation`/`notifyUser`
-- [ ] Rate limiting on `message:send` (spam/flood protection)
-- [ ] Link previews for URLs in message content
+
+- [ ] **Push notifications (FCM/APNs) when the recipient is offline** — **on
+  hold, 2026-08-25**. Architecture was decided (this service sends FCM
+  directly rather than just emitting a webhook — per-`oauth_client` Firebase
+  service-account credential on a new `oauth_clients.fcm_service_account_json`
+  column, since this microservice is shared across multiple integrating
+  projects and each has its own Firebase project; a `device_tokens` table +
+  `POST/DELETE /v1/profile/device-tokens` for registration; presence tracking
+  moved from `ChatGateway`'s private `onlineSocketCounts` map into
+  `ChatEventsService` so `MessagesService`/`CallsService` can query
+  `isOnline(userId)` before pushing) but the implementation was started and
+  then explicitly reverted at request before any migration was applied —
+  `firebase-admin` was installed and removed again, schema/lockfile fully
+  restored, nothing of it is in the tree. Resume by re-deriving the design
+  above rather than searching for leftover code (there isn't any).
+  1. `prisma/schema.prisma`: add `oauth_clients.fcm_service_account_json
+     String? @db.Text` (nullable = push skipped for that client — this is the
+     literal "can I skip it" answer: leave it unset) and a `device_tokens`
+     table (`id`, `user_id`, `token @unique`, `platform` enum
+     `ios`/`android`/`web`, timestamps) + relation on `users`. Migration
+     needed — match the DB's real `utf8mb4_general_ci` collation like every
+     other hand-authored migration in this file.
+  2. Move `ChatGateway`'s `onlineSocketCounts` map into `ChatEventsService`
+     as `registerSocket`/`unregisterSocket`/`isOnline`, update
+     `markOnline`/`markOffline` to call it instead of a local map.
+  3. New `src/modules/push/` module: `PushService` caches one
+     `admin.app.App` per `oauth_client_id` (Firebase Admin SDK requires named
+     apps for multi-tenant credentials), lazily initialized from
+     `fcm_service_account_json`; a client with no credential configured
+     caches a "skip" result rather than retrying every call. `sendToUser()`
+     is best-effort — never throws into the caller, logs and swallows
+     failures the same way `ChatEventsService.safeBroadcast` does elsewhere
+     — looks up the user's device tokens, calls
+     `messaging().sendEachForMulticast()`, and deletes tokens that come back
+     "unregistered" (uninstalled app / stale token).
+  4. Device-token endpoints on `ProfileController` (natural fit —
+     "my devices"): `POST /v1/profile/device-tokens` (upsert by token,
+     reassigning `user_id` if the same physical device previously belonged
+     to a different logged-in user), `DELETE
+     /v1/profile/device-tokens/:token`.
+  5. Wire `PushService.sendToUser` into `MessagesService.sendMessage` (push
+     each active member who isn't the sender and isn't `isOnline`) and,
+     as a low-cost addition once the plumbing exists, `CallsService
+     .initiateCall` (push offline invitees about an incoming call).
+  6. QA: can't verify actual FCM delivery without real Firebase credentials —
+     be upfront about that limit rather than faking it. What **is**
+     verifiable end-to-end against the live DB: the skip path (no credential
+     configured → message send still succeeds, nothing throws), device-token
+     CRUD, `isOnline` correctness across real socket connect/disconnect, and
+     that a malformed/dummy service-account JSON logs a warning and no-ops
+     instead of crashing the request.
+
+- [ ] **Rate limiting on `message:send`** (spam/flood protection) — **built,
+  verified, then reverted 2026-08-25 at explicit request ("no need")**. Not
+  re-litigated here — restated as still-open so it isn't lost, per this
+  file's convention for items that get built and then intentionally rolled
+  back (see the JWT-verification-duplication item above for the same
+  pattern).
+  - What existed, if picked up again: a generic `RateLimiterService`
+    (in-memory sliding window, keyed by an arbitrary string — deliberately
+    not message-specific so Phase 7's member-list limits could reuse it),
+    provided directly in `MessagesModule` (not its own wrapping module —
+    that was corrected once already, see the note further down about
+    matching the `SettingService`/`PrismaService` convention). Enforced
+    inside `MessagesService.sendMessage()` itself, before `assertMembership`,
+    so one check point covered both the WS `message:send` handler and the
+    REST `POST /:conversation_hash` endpoint. Default 10 messages/10s per
+    user, env-configurable (`MESSAGE_RATE_LIMIT_MAX`/
+    `MESSAGE_RATE_LIMIT_WINDOW_MS`), rejected with a plain
+    `HttpException(..., HttpStatus.TOO_MANY_REQUESTS)` — 429 over REST, WS
+    ack failure with the same message over WS, no transport-specific code
+    needed.
+  - Flagged then, still true if resumed: `ConversationsService
+    .startDirectConversation`'s opening message bypasses `sendMessage()`
+    entirely (it's created directly via its own `tx.messages.create(...)`),
+    so it never consumed a rate-limit slot — a determined spammer could
+    still flood via new conversations. Was scoped out deliberately as a
+    separate concern, not an oversight.
+  - QA before removal: 11 assertions, all passing, against a disposable
+    instance with a fast test config (5 msgs/3s) — exact limit boundary,
+    429/ack-failure with the right message, per-user isolation, window
+    rollover recovery, both transports. Verified again after removal too:
+    15 sends in a row with no pauses all succeeded (`201`), confirming
+    the removal was clean, not partial.
+  - Every file this added (`src/common/services/rate-limiter/` entirely,
+    the `assertNotRateLimited` method, the `RateLimiterService`
+    constructor param, the `MESSAGE_RATE_LIMIT*` consts) was removed;
+    `tsc`, build, and a live boot after removal all confirmed clean.
+
+- [ ] **Link previews for URLs in message content**
+  1. On send, regex-detect the first URL in `content`.
+  2. Fetch it server-side (`HEAD`/`GET`, timeout + response-size cap), parse
+     `<title>`/`og:title`/`og:image`/`og:description`.
+  3. Persist so it isn't re-fetched on every read — either a
+     `message_link_previews` table or a JSON column on `messages`; needs
+     migration either way.
+  4. **Real risk, not optional**: SSRF — this is the server fetching an
+     arbitrary URL a user typed. Needs an allowlist/deny-private-and-internal-
+     address-ranges guard (reject `localhost`, `127.0.0.0/8`, `10.0.0.0/8`,
+     `172.16.0.0/12`, `192.168.0.0/16`, link-local, etc., and any redirect
+     that lands on one) before this ships, not after.
+  5. QA: a message with a real public URL gets a preview; a message with a
+     URL pointing at an internal/private address gets skipped, not fetched —
+     verify the guard actually fires, don't just reason about it.
+
+### Phase 7 — Remaining gaps found in a fresh Messenger-parity pass (2026-08-25)
+
+Not from the original gap analysis at the top of this roadmap — found by
+re-checking the current API against Messenger's actual feature set. Grouped
+here rather than folded into Phase 1/6 so they're not missed.
+
+- [x] **Group ownership transfer** — **fixed 2026-08-25**. If the owner left
+  a group via self-removal, the group used to be left with no owner at all.
+  - Promotion rule, in `ConversationsService.removeGroupMember`: when the
+    departing member is both `isSelf` and currently `owner`, promote the
+    longest-tenured (earliest-`joined_at`) `admin`; if there's no admin, the
+    longest-tenured plain `member`; if there's no one else active, no
+    promotion (matches the prior end state, just made intentional — a
+    one-member group has no one left to promote). New private
+    `findOwnerSuccessor()` helper does the ranking.
+  - Guarded on "no remaining owner among the other active members" rather
+    than just "the departing member was owner" — `updateMemberRole`
+    technically allows promoting a second person to `owner` without
+    demoting the first (it only blocks changing your *own* role), a
+    pre-existing quirk noticed while building this, not fixed here since
+    it's a separate concern, but this guard means that edge case doesn't
+    get a redundant extra owner piled on top when the original owner later
+    leaves.
+  - The `left_at` update and the promotion (when one happens) run in the
+    same `$transaction` — no window where the departure is committed but
+    the promotion isn't (or vice versa).
+  - Broadcasts the existing `member:role_updated` event for the promoted
+    member (same shape `updateMemberRole` already produces) — no new WS
+    event needed. Uses the pre-departure member list for both broadcasts
+    (`member:removed` and `member:role_updated`), same as
+    `member:removed` already did, so the departing owner's own client also
+    hears about the handoff.
+  (`conversations.service.ts`)
+
+  No migration — pure application-code change.
+
+  **QA — real integration testing against a disposable second app
+  instance**, not just static review: `PORT=3999 node dist/src/main.js`
+  alongside the user's own dev server (never touched), driven with real
+  HTTP `fetch` calls and a real `socket.io-client` connection, disposable
+  test users/conversations cleaned up from the DB afterward. 18 assertions
+  across 5 scenarios, all passing:
+  - Two admins at different tenures, owner leaves → the **earlier-joined**
+    admin becomes owner, the later-joined one stays admin (confirms tenure
+    ranking, not just "any admin") — verified both via a follow-up `GET
+    .../members` call and **live over a real WS connection**: the promoted
+    member's socket actually received `member:role_updated` (correct
+    `user_id`/`role`) and `member:removed` for the departing owner.
+  - No admins at all → falls back to the earliest-joined plain member;
+    later-joined member is untouched.
+  - The only other member had already left before the owner did → owner
+    leaving is still a clean 204, no crash, nothing to promote.
+  - A non-self removal (owner removing a regular member) never touches
+    ownership — sanity check that the promotion logic is gated on the
+    *departing* member being owner, not merely "an owner exists".
+  - The defensive guard verified directly: manufactured the pre-existing
+    "two owners" quirk via `updateMemberRole`, then had the original owner
+    leave — the remaining co-owner was left alone, not double-promoted or
+    otherwise touched.
+
+  **Also**: `rate-limiter.module.ts` (a wrapping module for
+  `RateLimiterService`) was removed at request — `SettingService`/
+  `PrismaService` are provided directly in each consuming module's own
+  `providers` array rather than through a wrapping module, so
+  `RateLimiterService` was made to match that convention too. Moot now that
+  the rate limiter itself was removed entirely (see that item above), but
+  the underlying convention point stands for anything added later:
+  services with no cross-module shared state don't need their own module,
+  just list them directly in `providers`.
+
+  **Also**: a follow-up request to remove `chat-events.module.ts` the same
+  way was **not** done as asked, and flagged instead — `ChatEventsService`
+  holds real shared state (the Socket.IO `Server` instance, set once via
+  `ChatGateway.afterInit()` → `setServer()`) that
+  `ConversationsService`/`MessagesService`/`BlocksService`/`CallsService`
+  all need the *same* instance of. Providing it directly per-module the way
+  `RateLimiterService` now is would give each module its own separate
+  instance — only `ChatGateway`'s would ever have the `Server` set, every
+  other module's broadcast calls would silently no-op forever (`this
+  .server?.to(...)` throws nothing, it just does nothing). Presented as a
+  tradeoff rather than either silently complying (real regression) or
+  silently refusing; `@Global()` was chosen and applied, verified live
+  (booted the app, drove a real REST send from `MessagesModule` through to
+  a real connected socket receiving the broadcast, proving the shared
+  instance held) — then **reverted back to the original explicit-imports
+  design** shortly after. `ChatEventsModule` is not `@Global()`;
+  `ConversationsModule`/`MessagesModule`/`BlocksModule`/`CallsModule`/
+  `ChatModule` each import it explicitly again, as they did before any of
+  this. Noted here so this back-and-forth isn't mistaken for drift later —
+  the explicit-imports form is the current, intended state.
+
+  **Also, unrelated to this item but discovered and fixed along the way**:
+  the DB connection flakiness that had intermittently affected QA cleanup
+  steps all session was root-caused, not just worked around again — 13
+  stale `nest start --watch` processes from a *different* project
+  (`moitv-api`), running since Aug 8, each holding their own connection
+  pool against the same shared local MySQL server (`max_connections=151`,
+  server-wide). Killed at the user's explicit go-ahead; connections dropped
+  from a saturated state to 81/151 immediately after, and every QA run
+  since (including this one) has completed cleanup on the first try with
+  no retries needed.
+
+<!-- - [ ] **Rate/size limits on member lists beyond `ArrayMaxSize(255)`**
+  *(deferred from Phase 1)* — decide a per-user limit on
+  `createGroupConversation`/`addGroupMembers` calls per unit time. The
+  `message:send` rate limiter this was meant to share infra with was built
+  and then reverted (see above) — this item now stands alone; if it's
+  picked up, decide fresh whether it needs its own small in-memory
+  sliding-window limiter or something else, rather than assuming reusable
+  infra that isn't there. -->
+
+- [x] **Pin/unpin an individual message within a conversation** — **fixed
+  2026-08-25**. Distinct from Phase 5's conversation-level pin (which pins a
+  *conversation* to the top of the inbox); Messenger has both, this repo
+  only had the inbox one before this.
+  - `messages` gets `is_pinned`/`pinned_at`/`pinned_by` — columns directly on
+    `messages` rather than a side table, matching how Phase 5 put per-member
+    settings directly on `conversation_members`. `pinned_by` is a nullable FK
+    to `users`, cleared alongside the other two fields on unpin. Adding a
+    second FK from `messages` to `users` (alongside the existing `sender_id`
+    one) required naming both relations explicitly (`"MessageSender"` /
+    `"MessagePinner"`) — Prisma can't disambiguate two unnamed relations
+    between the same two models. This is a pure Prisma-client-level rename;
+    it doesn't touch the existing `sender_id` FK's actual DB constraint name
+    (Prisma derives that from the column, not the relation name), so no risk
+    to existing data — confirmed by the migration only containing the new
+    columns/FK, nothing touching `sender_id`.
+  - **Decided who can pin**: any active member, not sender/admin-only —
+    matches how reactions already work in this codebase, and matches actual
+    Messenger group-chat behavior (pinning isn't admin-gated there either).
+  - `POST`/`DELETE /v1/conversations/:hash/:message_hash/pin`, both reusing
+    the existing `getOwnedMessage`/`assertMembership` guards. `POST` is
+    idempotent-but-updating (re-pinning an already-pinned message just
+    updates `pinned_by`/`pinned_at` to the latest pinner — last-pin-wins, no
+    error); `DELETE` is idempotent (unpinning an already-unpinned message is
+    a silent no-op, matching `removeReaction`'s pattern). Pinning a deleted
+    message is rejected (400), matching `reactToMessage`/`forwardMessage`'s
+    existing deleted-message guards. Both self-broadcast
+    (`message:pinned`/`message:unpinned`) using the already-fetched
+    `conversation` object, same pattern as every other per-message action in
+    `MessagesService` — no redundant re-query introduced.
+  - `GET /v1/conversations/:hash/pinned` lists a conversation's pinned
+    messages, most-recently-pinned first, capped at 100 with no cursor
+    pagination — pinned messages are a small "highlights" set by nature
+    (matches how Messenger's own pinned list works), not the full history,
+    so the added complexity of cursor pagination wasn't worth it here.
+  - Route collisions checked deliberately before writing, not just assumed
+    safe: `GET :conversation_hash/pinned` (2 segments) doesn't collide with
+    `GET :conversation_hash` (1) or `GET :conversation_hash/search` (2,
+    different literal); `POST`/`DELETE :conversation_hash/:message_hash/pin`
+    (3 segments) don't collide with the existing `.../forward`,
+    `.../delivered`, `.../reactions` 3-segment routes (all different
+    literals). Confirmed via the live route dump at boot
+    (`RouterExplorer`), not just reasoned about.
+  (`prisma/schema.prisma`, `messages.model.ts`, `messages.service.ts`,
+  `messages.controller.ts`)
+
+  **Migration**: `prisma/migrations/20260826060000_add_message_pin/` — adds
+  the three nullable/defaulted columns and the `pinned_by` FK. No existing
+  data risk (all-new nullable columns, no unique constraints, no backfill
+  needed) so applied directly via `migrate deploy`, no staged/two-phase
+  approach needed this time (unlike the `direct_key` migration, which did
+  need one because of the backfill-before-unique-index ordering problem).
+
+  **QA — real integration testing against a disposable second app
+  instance**, not just static review: `PORT=3999 node dist/src/main.js`
+  alongside the user's own dev server (never touched), driven with real
+  HTTP `fetch` calls and a real `socket.io-client` connection, disposable
+  test users/conversations cleaned up from the DB afterward. 20 assertions,
+  all passing:
+  - Pin/unpin round-trip with the response/list correctly reflecting
+    `is_pinned`/`pinned_at`/`pinned_by`; a **non-sender member** (bob
+    pinning alice's message) successfully pins, confirming the
+    any-member decision actually took effect, not just documented.
+  - **Live over a real WS connection**: the other member's socket received
+    `message:pinned` and `message:unpinned` as they happened — not inferred
+    from a follow-up GET. A non-member's socket received neither.
+  - `GET .../pinned` returns the right set in most-recently-pinned-first
+    order, correctly excludes an unpinned message and, after it, an
+    unpinned-then-deleted one.
+  - Idempotency verified both directions: double-unpin is a clean 204, and
+    re-pinning an already-pinned message succeeds and updates `pinned_by`
+    rather than erroring.
+  - Guards verified live, not just reasoned about: pinning a deleted message
+    → 400; a non-member attempting to pin, or to list pinned messages at
+    all, → 403 both times.
+  - Two real test-script bugs of my own were caught and fixed before this
+    was reported as done, not shipped on a misleading first result: an
+    earlier run assumed `POST .../pin` returns 200 (it's 201, matching this
+    API's existing convention for `react`/`markDelivered`/`blockUser` — no
+    `@HttpCode` override was ever intended here either); a related assertion
+    used `&&` with that same wrong status check, masking that the
+    `pinned_by` value being verified was actually already correct.
 
 ---
 
-**Next step**: pick the next phase (or a specific item) to implement — each
-phase is independently shippable. Items marked "needs migration" require a
-`prisma migrate` decision before code, same as the two open QA items above.
+**Next step**: both items in the original QA pass section above, ownership
+transfer, and message pin (all Phase 7) are fixed. Rate limiting (Phase 6)
+was built, verified, then reverted at request and is open again. Pick the
+next phase (or a specific item) to implement. Each phase is independently
+shippable. Items marked "needs migration" require a `prisma migrate`
+decision before code. Suggested order, cheapest/lowest-risk first:
+member-list limits (Phase 7) → link previews (Phase 6, last on purpose —
+it's the only one with a real security design question attached) → push
+notifications (Phase 6, on hold pending your call on when to resume) →
+`message:send` rate limiting (Phase 6, only if actually wanted again — it
+was explicitly removed once already).
 
 **Verification**: `npx tsc --noEmit`, `npm run build`, and `npm test` all
 pass after Phase 1; `eslint --fix` applied to the touched files (formatting

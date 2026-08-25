@@ -4,11 +4,12 @@ import { ChatEventsModule } from '../../common/services/chat-events/chat-events.
 import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { SettingService } from '../../core/services/setting/setting.service';
 import { OauthJwtGuard } from '../../common/guards/oauth-jwt/oauth-jwt.guard';
+import { BlocksModule } from '../blocks/blocks.module';
 import { ConversationsController } from './conversations.controller';
 import { ConversationsService } from './conversations.service';
 
 @Module({
-  imports: [JwtModule.register({}), ChatEventsModule],
+  imports: [JwtModule.register({}), ChatEventsModule, BlocksModule],
   controllers: [ConversationsController],
   providers: [
     ConversationsService,

@@ -9,5 +9,6 @@ export * from './message-reactions';
 export * from './message-reads';
 export * from './message-deliveries';
 export * from './message-attachments';
+export * from './blocked-users';
 export * from './calls';
 export * from './call-participants';

@@ -24,12 +24,14 @@ import {
   AddGroupMembersDto,
   ConversationListResponseDto,
   ConversationResponseDto,
+  ConversationSettingsDto,
   CreateGroupConversationDto,
   GroupConversationResponseDto,
   GroupMemberDto,
   GroupMemberListResponseDto,
   ListConversationsQueryDto,
   StartDirectConversationDto,
+  UpdateConversationSettingsDto,
   UpdateGroupDto,
   UpdateMemberRoleDto,
 } from './conversations.model';
@@ -88,6 +90,24 @@ export class ConversationsController {
     @Body() dto: UpdateGroupDto,
   ) {
     return this.conversationsService.updateGroupInfo(
+      req.user.id,
+      conversationHash,
+      dto,
+    );
+  }
+
+  @Patch(':conversation_hash/settings')
+  @ApiOperation({
+    summary:
+      'Mute, archive, or pin this conversation for yourself. Only the fields you pass are changed.',
+  })
+  @ApiOkResponse({ type: ConversationSettingsDto })
+  updateConversationSettings(
+    @Req() req: any,
+    @Param('conversation_hash') conversationHash: string,
+    @Body() dto: UpdateConversationSettingsDto,
+  ) {
+    return this.conversationsService.updateConversationSettings(
       req.user.id,
       conversationHash,
       dto,

@@ -7,8 +7,13 @@ import {
 import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
-import { message_type } from '../../../generated/prisma/enums';
+import type { Prisma } from '../../../generated/prisma/client';
+import {
+  conversation_type,
+  message_type,
+} from '../../../generated/prisma/enums';
 import { ConversationsService } from '../conversations/conversations.service';
+import { BlocksService } from '../blocks/blocks.service';
 import {
   EditMessageDto,
   ForwardMessageDto,
@@ -19,6 +24,7 @@ import {
   MessageReactionDto,
   MessageResponseDto,
   ReactToMessageDto,
+  SearchMessagesQueryDto,
   SendMessageDto,
 } from './messages.model';
 
@@ -28,6 +34,7 @@ export class MessagesService {
     private readonly prismaService: PrismaService,
     private readonly conversationsService: ConversationsService,
     private readonly chatEventsService: ChatEventsService,
+    private readonly blocksService: BlocksService,
   ) {}
 
   async sendMessage(
@@ -39,6 +46,17 @@ export class MessagesService {
       conversationHash,
       currentUserId,
     );
+
+    if (conversation.type === conversation_type.direct) {
+      const otherMember = conversation.members.find(
+        (member) => member.user_id !== currentUserId && !member.left_at,
+      );
+      if (otherMember)
+        await this.blocksService.assertNotBlocked(
+          currentUserId,
+          otherMember.user_id,
+        );
+    }
 
     const repliedMessage = dto.replied_message_hash
       ? await this.assertRepliableMessage(
@@ -73,7 +91,10 @@ export class MessagesService {
       },
     });
 
-    return new MessageResponseDto(created);
+    const response = new MessageResponseDto(created);
+    this.broadcastToConversation(conversation, 'message:new', response);
+
+    return response;
   }
 
   async markConversationRead(
@@ -113,7 +134,7 @@ export class MessagesService {
       });
     }
 
-    return new MarkReadResultDto({
+    const result = new MarkReadResultDto({
       conversation_hash: conversation.hash,
       read_count: unreadMessages.length,
       last_read_message_id:
@@ -121,6 +142,14 @@ export class MessagesService {
           ? unreadMessages[unreadMessages.length - 1].id
           : null,
     });
+
+    this.broadcastToConversation(conversation, 'message:read', {
+      ...result,
+      user_id: currentUserId,
+      read_at: new Date().toISOString(),
+    });
+
+    return result;
   }
 
   async listMessages(
@@ -138,6 +167,65 @@ export class MessagesService {
     const found = await this.prismaService.messages.findMany({
       where: {
         conversation_id: conversation.id,
+        ...(query.cursor ? { id: { lt: query.cursor } } : {}),
+      },
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
+      orderBy: { id: 'desc' },
+      take: limit,
+    });
+
+    const next_cursor =
+      found.length === limit ? found[found.length - 1].id : null;
+
+    const data = found.map((message) => new MessageResponseDto(message));
+
+    return new MessageListResponseDto({ data, next_cursor });
+  }
+
+  async searchInConversation(
+    currentUserId: string,
+    conversationHash: string,
+    query: SearchMessagesQueryDto,
+  ): Promise<MessageListResponseDto> {
+    const conversation = await this.conversationsService.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+
+    return this.search(currentUserId, query, {
+      conversation_id: conversation.id,
+    });
+  }
+
+  async searchAllConversations(
+    currentUserId: string,
+    query: SearchMessagesQueryDto,
+  ): Promise<MessageListResponseDto> {
+    return this.search(currentUserId, query, {
+      conversation: {
+        members: { some: { user_id: currentUserId, left_at: null } },
+      },
+    });
+  }
+
+  private async search(
+    currentUserId: string,
+    query: SearchMessagesQueryDto,
+    scope: Prisma.messagesWhereInput,
+  ): Promise<MessageListResponseDto> {
+    const limit = query.limit ?? 20;
+
+    const found = await this.prismaService.messages.findMany({
+      where: {
+        ...scope,
+        deleted_at: null,
+        content: { contains: query.q },
         ...(query.cursor ? { id: { lt: query.cursor } } : {}),
       },
       include: {
@@ -249,6 +337,96 @@ export class MessagesService {
     });
 
     return new MessageDeliveryDto(delivery);
+  }
+
+  async pinMessage(
+    currentUserId: string,
+    conversationHash: string,
+    messageHash: string,
+  ): Promise<MessageResponseDto> {
+    const conversation = await this.conversationsService.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+    const message = await this.getOwnedMessage(conversation.id, messageHash);
+
+    if (message.deleted_at)
+      throw new BadRequestException(
+        'Cannot pin a deleted message!||មិនអាចខ្ទាស់សារដែលបានលុបទេ!',
+      );
+
+    const updated = await this.prismaService.messages.update({
+      where: { id: message.id },
+      data: {
+        is_pinned: true,
+        pinned_at: new Date(),
+        pinned_by: currentUserId,
+      },
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
+    });
+
+    const response = new MessageResponseDto(updated);
+    this.broadcastToConversation(conversation, 'message:pinned', response);
+
+    return response;
+  }
+
+  async unpinMessage(
+    currentUserId: string,
+    conversationHash: string,
+    messageHash: string,
+  ): Promise<void> {
+    const conversation = await this.conversationsService.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+    const message = await this.getOwnedMessage(conversation.id, messageHash);
+
+    if (!message.is_pinned) return; // wasn't pinned — idempotent, not an error
+
+    await this.prismaService.messages.update({
+      where: { id: message.id },
+      data: { is_pinned: false, pinned_at: null, pinned_by: null },
+    });
+
+    this.broadcastToConversation(conversation, 'message:unpinned', {
+      conversation_hash: conversationHash,
+      message_hash: messageHash,
+      user_id: currentUserId,
+    });
+  }
+
+  async listPinnedMessages(
+    currentUserId: string,
+    conversationHash: string,
+  ): Promise<MessageListResponseDto> {
+    const conversation = await this.conversationsService.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+
+    const found = await this.prismaService.messages.findMany({
+      where: { conversation_id: conversation.id, is_pinned: true },
+      include: {
+        replied_message: true,
+        attachments: true,
+        reactions: true,
+        reads: true,
+        deliveries: true,
+      },
+      orderBy: { pinned_at: 'desc' },
+      take: 100,
+    });
+
+    const data = found.map((message) => new MessageResponseDto(message));
+
+    return new MessageListResponseDto({ data, next_cursor: null });
   }
 
   async editMessage(

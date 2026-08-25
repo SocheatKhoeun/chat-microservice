@@ -228,24 +228,12 @@ export class ChatGateway
     return this.handle(client, async (user) => {
       const dto = await validateDto(WsSendMessageDto, body);
 
-      const message = await this.messagesService.sendMessage(
-        user.id,
-        dto.conversation_hash,
-        {
-          content: dto.body,
-          type: dto.type,
-          replied_message_hash: dto.replied_message_hash,
-          attachments: dto.attachments,
-        },
-      );
-
-      await this.broadcastToConversation(
-        dto.conversation_hash,
-        'message:new',
-        message,
-      );
-
-      return message;
+      return this.messagesService.sendMessage(user.id, dto.conversation_hash, {
+        content: dto.body,
+        type: dto.type,
+        replied_message_hash: dto.replied_message_hash,
+        attachments: dto.attachments,
+      });
     });
   }
 
@@ -257,22 +245,10 @@ export class ChatGateway
     return this.handle(client, async (user) => {
       const dto = await validateDto(MarkReadDto, body);
 
-      const result = await this.messagesService.markConversationRead(
+      return this.messagesService.markConversationRead(
         user.id,
         dto.conversation_hash,
       );
-
-      await this.broadcastToConversation(
-        dto.conversation_hash,
-        'message:read',
-        {
-          ...result,
-          user_id: user.id,
-          read_at: new Date().toISOString(),
-        },
-      );
-
-      return result;
     });
   }
 
@@ -412,22 +388,6 @@ export class ChatGateway
     });
   }
 
-  private async broadcastToConversation(
-    conversationHash: string,
-    event: string,
-    payload: unknown,
-  ): Promise<void> {
-    const memberIds =
-      await this.conversationsService.listMemberUserIds(conversationHash);
-
-    this.chatEventsService.broadcastToConversation(
-      conversationHash,
-      memberIds,
-      event,
-      payload,
-    );
-  }
-
   private async handle<T>(
     client: AuthenticatedSocket,
     fn: (user: users) => Promise<T>,
@@ -447,13 +407,9 @@ export class ChatGateway
       if (error instanceof DtoValidationError)
         return { success: false, message: error.message };
 
-      // HttpException (NotFound/Forbidden/BadRequest/Unauthorized/…) carries a
-      // message that was deliberately written to be shown to the client.
       if (error instanceof HttpException)
         return { success: false, message: error.message };
 
-      // Anything else (DB errors, etc.) is unexpected: log it server-side and
-      // never forward its raw message to the client, which could leak internals.
       this.logger.error(
         `WS handler failed: ${error instanceof Error ? (error.stack ?? error.message) : error}`,
       );

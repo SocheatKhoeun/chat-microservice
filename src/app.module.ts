@@ -8,6 +8,7 @@ import { ConversationsModule } from './modules/conversations/conversations.modul
 import { MessagesModule } from './modules/messages/messages.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { AttachmentsModule } from './modules/attachments/attachments.module';
+import { BlocksModule } from './modules/blocks/blocks.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { AttachmentsModule } from './modules/attachments/attachments.module';
     MessagesModule,
     ChatModule,
     AttachmentsModule,
+    BlocksModule,
   ],
   controllers: [AppController],
   providers: [AppService],

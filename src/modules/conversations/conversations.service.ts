@@ -7,22 +7,27 @@ import {
 import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
-import type { Prisma } from '../../../generated/prisma/client';
+import { directConversationKey } from '../../common/utils/conversation-key.util';
+import { isUniqueConstraintViolation } from '../../common/utils/prisma-error.util';
+import type { Prisma, conversations } from '../../../generated/prisma/client';
 import {
   conversation_member_role,
   conversation_type,
   message_type,
 } from '../../../generated/prisma/enums';
+import { BlocksService } from '../blocks/blocks.service';
 import {
   AddGroupMembersDto,
   ConversationListItemDto,
   ConversationListResponseDto,
   ConversationResponseDto,
+  ConversationSettingsDto,
   CreateGroupConversationDto,
   GroupConversationResponseDto,
   GroupMemberDto,
   ListConversationsQueryDto,
   StartDirectConversationDto,
+  UpdateConversationSettingsDto,
   UpdateGroupDto,
   UpdateMemberRoleDto,
 } from './conversations.model';
@@ -36,6 +41,7 @@ export class ConversationsService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly chatEventsService: ChatEventsService,
+    private readonly blocksService: BlocksService,
   ) {}
 
   async startDirectConversation(
@@ -56,40 +62,27 @@ export class ConversationsService {
         'You cannot start a conversation with yourself!||អ្នកមិនអាចជជែកជាមួយខ្លួនឯងបានទេ!',
       );
 
+    await this.blocksService.assertNotBlocked(currentUserId, targetUserId);
+
+    const directConversation = await this.findOrCreateDirectConversation(
+      currentUserId,
+      targetUserId,
+    );
+
     const { conversation, message } = await this.prismaService.$transaction(
       async (tx) => {
-        let conversation = await tx.conversations.findFirst({
-          where: {
-            type: conversation_type.direct,
-            AND: [
-              { members: { some: { user_id: currentUserId, left_at: null } } },
-              { members: { some: { user_id: targetUserId, left_at: null } } },
-            ],
-          },
-          include: { members: true },
+        await tx.conversation_members.createMany({
+          data: [
+            { conversation_id: directConversation.id, user_id: currentUserId },
+            { conversation_id: directConversation.id, user_id: targetUserId },
+          ],
+          skipDuplicates: true,
         });
 
-        if (!conversation) {
-          const created = await tx.conversations.create({
-            data: {
-              hash: generateHash(),
-              type: conversation_type.direct,
-              created_by: currentUserId,
-            },
-          });
-
-          await tx.conversation_members.createMany({
-            data: [
-              { conversation_id: created.id, user_id: currentUserId },
-              { conversation_id: created.id, user_id: targetUserId },
-            ],
-          });
-
-          conversation = await tx.conversations.findUniqueOrThrow({
-            where: { id: created.id },
-            include: { members: true },
-          });
-        }
+        const conversation = await tx.conversations.findUniqueOrThrow({
+          where: { id: directConversation.id },
+          include: { members: true },
+        });
 
         // Every "start" always sends a message, so the other user has something to be
         // notified about — whether the conversation is brand new or already existed.
@@ -132,30 +125,44 @@ export class ConversationsService {
     query: ListConversationsQueryDto,
   ): Promise<ConversationListResponseDto> {
     const limit = query.take ?? 30;
+    const archived = query.archived ?? false;
 
-    const conversations = await this.prismaService.conversations.findMany({
+    const memberships = await this.prismaService.conversation_members.findMany({
       where: {
-        members: { some: { user_id: currentUserId, left_at: null } },
-        ...(query.cursor ? { id: { lt: query.cursor } } : {}),
+        user_id: currentUserId,
+        left_at: null,
+        is_archived: archived,
+        ...(query.cursor ? { conversation_id: { lt: query.cursor } } : {}),
       },
+      orderBy: [{ is_pinned: 'desc' }, { conversation_id: 'desc' }],
+      take: limit,
       include: {
-        members: true,
-        messages: {
-          orderBy: { id: 'desc' },
-          take: 1,
+        conversation: {
           include: {
-            replied_message: true,
-            attachments: true,
-            reactions: true,
+            members: true,
+            messages: {
+              orderBy: { id: 'desc' },
+              take: 1,
+              include: {
+                replied_message: true,
+                attachments: true,
+                reactions: true,
+              },
+            },
           },
         },
       },
-      orderBy: { id: 'desc' },
-      take: limit,
     });
 
+    const conversationIds = memberships.map((m) => m.conversation_id);
+    const unreadCounts = await this.unreadCountsByConversation(
+      currentUserId,
+      conversationIds,
+    );
+
     // conversation_members.user_id already IS the other user's id, so no extra lookup is needed.
-    const items = conversations.map((conversation) => {
+    const items = memberships.map((membership) => {
+      const conversation = membership.conversation;
       const otherMember = conversation.members.find(
         (member) => member.user_id !== currentUserId,
       );
@@ -171,29 +178,118 @@ export class ConversationsService {
         created_at: conversation.created_at,
         updated_at: conversation.updated_at,
         last_message: conversation.messages[0] ?? null,
+        is_muted: membership.is_muted,
+        is_archived: membership.is_archived,
+        is_pinned: membership.is_pinned,
+        unread_count: unreadCounts.get(conversation.id) ?? 0,
       });
     });
 
     const next_cursor =
       items.length === limit ? items[items.length - 1].id : null;
 
-    return new ConversationListResponseDto({ data: items, next_cursor });
+    const total_unread_conversations =
+      await this.prismaService.conversation_members.count({
+        where: {
+          user_id: currentUserId,
+          left_at: null,
+          is_archived: false,
+          conversation: {
+            messages: {
+              some: {
+                sender_id: { not: currentUserId },
+                reads: { none: { user_id: currentUserId } },
+              },
+            },
+          },
+        },
+      });
+
+    return new ConversationListResponseDto({
+      data: items,
+      next_cursor,
+      total_unread_conversations,
+    });
   }
 
-  async listMemberUserIds(conversationHash: string): Promise<string[]> {
-    const conversation = await this.prismaService.conversations.findUnique({
-      where: { hash: conversationHash },
-      include: { members: true },
+  /** { conversation_id -> count of messages in it unread by this user }. */
+  private async unreadCountsByConversation(
+    currentUserId: string,
+    conversationIds: number[],
+  ): Promise<Map<number, number>> {
+    if (conversationIds.length === 0) return new Map();
+
+    const grouped = await this.prismaService.messages.groupBy({
+      by: ['conversation_id'],
+      where: {
+        conversation_id: { in: conversationIds },
+        sender_id: { not: currentUserId },
+        reads: { none: { user_id: currentUserId } },
+      },
+      _count: { _all: true },
     });
 
-    return (
-      conversation?.members
-        .filter((member) => !member.left_at)
-        .map((member) => member.user_id) ?? []
+    return new Map(
+      grouped.map((row) => [row.conversation_id, row._count._all]),
     );
   }
 
-  /** Every other user this person shares at least one active conversation with — who presence changes go to. */
+  async updateConversationSettings(
+    currentUserId: string,
+    conversationHash: string,
+    dto: UpdateConversationSettingsDto,
+  ): Promise<ConversationSettingsDto> {
+    const conversation = await this.assertMembership(
+      conversationHash,
+      currentUserId,
+    );
+
+    const member = conversation.members.find(
+      (m) => m.user_id === currentUserId && !m.left_at,
+    );
+
+    if (!member)
+      throw new ForbiddenException(
+        'You are not a member of this conversation!||អ្នកមិនមែនជាសមាជិកនៃការសន្ទនានេះទេ!',
+      );
+
+    const updated = await this.prismaService.conversation_members.update({
+      where: { id: member.id },
+      data: {
+        ...(dto.is_muted !== undefined ? { is_muted: dto.is_muted } : {}),
+        ...(dto.is_archived !== undefined
+          ? { is_archived: dto.is_archived }
+          : {}),
+        ...(dto.is_pinned !== undefined
+          ? {
+              is_pinned: dto.is_pinned,
+              pinned_at: dto.is_pinned ? new Date() : null,
+            }
+          : {}),
+      },
+    });
+
+    const response = new ConversationSettingsDto({
+      conversation_hash: conversationHash,
+      is_muted: updated.is_muted,
+      is_archived: updated.is_archived,
+      is_pinned: updated.is_pinned,
+      pinned_at: updated.pinned_at,
+    });
+
+    // Self-only setting — broadcast to this user's other devices, never the
+    // rest of the conversation (nobody else needs to know you muted them).
+    this.chatEventsService.safeBroadcast(() =>
+      this.chatEventsService.notifyUser(
+        currentUserId,
+        'conversation:settings_updated',
+        response,
+      ),
+    );
+
+    return response;
+  }
+
   async listContactUserIds(userId: string): Promise<string[]> {
     const contacts = await this.prismaService.conversation_members.findMany({
       where: {
@@ -449,9 +545,31 @@ export class ConversationsService {
         );
     }
 
-    await this.prismaService.conversation_members.update({
-      where: { id: targetMember.id },
-      data: { left_at: new Date() },
+    const isOwnerLeaving =
+      isSelf && targetMember.role === conversation_member_role.owner;
+    const remainingActiveMembers = conversation.members.filter(
+      (member) => member.user_id !== targetUserId && !member.left_at,
+    );
+    const hasRemainingOwner = remainingActiveMembers.some(
+      (member) => member.role === conversation_member_role.owner,
+    );
+
+    const successor =
+      isOwnerLeaving && !hasRemainingOwner
+        ? this.findOwnerSuccessor(remainingActiveMembers)
+        : null;
+
+    await this.prismaService.$transaction(async (tx) => {
+      await tx.conversation_members.update({
+        where: { id: targetMember.id },
+        data: { left_at: new Date() },
+      });
+
+      if (successor)
+        await tx.conversation_members.update({
+          where: { id: successor.id },
+          data: { role: conversation_member_role.owner },
+        });
     });
 
     this.chatEventsService.safeBroadcast(() =>
@@ -466,6 +584,20 @@ export class ConversationsService {
         },
       ),
     );
+
+    if (successor)
+      this.chatEventsService.safeBroadcast(() =>
+        this.chatEventsService.broadcastToConversation(
+          conversationHash,
+          this.activeMemberIds(conversation),
+          'member:role_updated',
+          {
+            conversation_hash: conversationHash,
+            user_id: successor.user_id,
+            role: conversation_member_role.owner,
+          },
+        ),
+      );
   }
 
   async updateMemberRole(
@@ -525,6 +657,31 @@ export class ConversationsService {
     return new GroupMemberDto(updated);
   }
 
+  private async findOrCreateDirectConversation(
+    userIdA: string,
+    userIdB: string,
+  ): Promise<conversations> {
+    const key = directConversationKey(userIdA, userIdB);
+
+    try {
+      return await this.prismaService.conversations.upsert({
+        where: { direct_key: key },
+        update: {},
+        create: {
+          hash: generateHash(),
+          type: conversation_type.direct,
+          created_by: userIdA,
+          direct_key: key,
+        },
+      });
+    } catch (error) {
+      if (!isUniqueConstraintViolation(error)) throw error;
+      return this.prismaService.conversations.findUniqueOrThrow({
+        where: { direct_key: key },
+      });
+    }
+  }
+
   private async assertUsersExist(userIds: string[]): Promise<void> {
     const found = await this.prismaService.users.findMany({
       where: { id: { in: userIds } },
@@ -564,6 +721,24 @@ export class ConversationsService {
       throw new ForbiddenException(
         'Only a group owner or admin can do this!||មានតែម្ចាស់ក្រុម ឬអ្នកគ្រប់គ្រងទេដែលអាចធ្វើវាបាន!',
       );
+  }
+
+  private findOwnerSuccessor(
+    candidates: ConversationWithMembers['members'],
+  ): ConversationWithMembers['members'][number] | null {
+    const byTenure = [...candidates].sort(
+      (a, b) => a.joined_at.getTime() - b.joined_at.getTime(),
+    );
+
+    return (
+      byTenure.find(
+        (member) => member.role === conversation_member_role.admin,
+      ) ??
+      byTenure.find(
+        (member) => member.role === conversation_member_role.member,
+      ) ??
+      null
+    );
   }
 
   private activeMemberIds(conversation: ConversationWithMembers): string[] {
