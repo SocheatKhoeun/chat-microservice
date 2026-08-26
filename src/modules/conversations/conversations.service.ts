@@ -47,13 +47,9 @@ export class ConversationsService {
   async startDirectConversation(
     currentUserId: string,
     dto: StartDirectConversationDto,
+    oauthClientId: number | null,
   ): Promise<ConversationResponseDto> {
-    const targetUser = await this.prismaService.users.findUnique({
-      where: { id: dto.user_id },
-    });
-
-    if (!targetUser)
-      throw new NotFoundException('User not found!||រកមិនឃើញអ្នកប្រើប្រាស់!');
+    const targetUser = await this.findOrCreateUser(dto.user_id, oauthClientId);
 
     const targetUserId = targetUser.id;
 
@@ -655,6 +651,25 @@ export class ConversationsService {
     );
 
     return new GroupMemberDto(updated);
+  }
+
+  private async findOrCreateUser(userId: string, oauthClientId: number | null) {
+    const existing = await this.prismaService.users.findUnique({
+      where: { id: userId },
+    });
+
+    if (existing) return existing;
+
+    try {
+      return await this.prismaService.users.create({
+        data: { id: userId, oauth_client_id: oauthClientId },
+      });
+    } catch (error) {
+      if (!isUniqueConstraintViolation(error)) throw error;
+      return this.prismaService.users.findUniqueOrThrow({
+        where: { id: userId },
+      });
+    }
   }
 
   private async findOrCreateDirectConversation(

@@ -928,6 +928,236 @@ here rather than folded into Phase 1/6 so they're not missed.
     used `&&` with that same wrong status check, masking that the
     `pinned_by` value being verified was actually already correct.
 
+### Phase 8 — WebSocket architecture audit (2026-08-26)
+
+Prompted by a 10-item WS checklist (keep socket alive globally, personal room
+for chat list, conversation room only when open, dedupe `message:new`, update
+chat list from `message:new`, maintain unread count, sync missed messages
+after reconnect, delivered status, edit/delete, reactions). Read the actual
+code for every item rather than assuming — 9 of the 10 turned out to already
+be correctly supported; one real gap was found and closed.
+
+- [x] **Confirmed already correct, no server change needed** (client
+  integration patterns the server already supports, or already-shipped
+  features):
+  - *Personal room for chat list* — every socket already auto-joins
+    `user:<id>` on connect, and `ChatEventsService.broadcastToConversation`
+    already sends to every member's personal room *in addition to* the
+    conversation room, specifically so chat-list-relevant events reach a
+    user regardless of which screen they're on. Already true since Phase 1.
+  - *Conversation room only when opened* — `conversation:join`/
+    `conversation:leave` are explicit, on-demand events, not automatic.
+  - *Deduplicate `message:new`* — Socket.IO's `.to([roomA, roomB]).emit()`
+    unions the socket set before emitting, so a socket in both the
+    conversation room and its own personal room still gets the event
+    exactly once; there's no server-side double-send to guard against. The
+    remaining dedup case (a client's own optimistic REST-send reconciling
+    against the broadcast of that same message) is inherently client-side,
+    and the server already gives it what it needs — the same `hash` in both
+    the REST response and the broadcast payload.
+  - *Update chat list from `message:new`* — client-side; the broadcast
+    payload already carries `conversation_id`/`content`/`hash`/`created_at`,
+    everything needed to update a local list without a re-fetch.
+  - *Maintain unread count* — already shipped in Phase 5:
+    `unread_count` per conversation and `total_unread_conversations` (the
+    app-icon-badge number) via `GET /v1/conversations`. Not pushed
+    incrementally over WS on new messages — client increments locally or
+    re-fetches, which is the standard pattern for this, not a gap.
+  - *Keep socket alive globally* — purely a client lifecycle concern; the
+    server has no per-screen connection assumption to work around (presence
+    is already ref-counted across multiple sockets per user, has been since
+    Phase 1).
+  - *Delivered status*, *edit/delete*, *reactions* — all already shipped
+    (Phase 3, Phase 2, Phase 2 respectively).
+- [x] **Real gap found and closed: sync missed messages after reconnect** —
+  `ListMessagesQueryDto.cursor` only ever supported backward pagination
+  (`id < cursor`, newest-first). There was no way to ask "everything since
+  message X" in one call — a reconnecting client had to fetch the newest
+  page and hope their last-known message fell within it, with no clean way
+  to walk forward through a larger gap.
+  - New optional `since_id` on `ListMessagesQueryDto` (REST) and
+    `ListMessagesWsDto` (WS `list_messages` — the more natural place to
+    actually call this from: right after a socket reconnects, ask each open
+    conversation what it missed). When given, `MessagesService#listMessages`
+    switches to sync mode: `id > since_id`, ordered **ascending**
+    (chronological replay order) instead of the normal descending "load the
+    conversation" order. Takes precedence over `cursor` if both are somehow
+    given.
+  - Reused `MessageListResponseDto.next_cursor` rather than adding a new
+    field — in sync mode it means "pass this back as `since_id` to keep
+    paging forward through a large backlog" instead of "pass as `cursor`
+    for the next older page"; same "there's more, here's where to continue"
+    contract either way, just walking the other direction. `null` means
+    fully caught up in both modes.
+  - No migration — pure application-code addition, no schema change.
+  (`messages.model.ts`, `messages.service.ts`, `chat.model.ts`)
+
+  **QA — real integration testing against a disposable second app
+  instance**, not just static review: `PORT=3999 node dist/src/main.js`
+  alongside the user's own dev server (never touched), driven with real
+  HTTP `fetch` calls and a real `socket.io-client` connection, disposable
+  test users/conversations cleaned up from the DB afterward. 15 assertions,
+  all passing:
+  - A 12-message conversation, syncing from "last seen message 4" with
+    `limit=5`: page 1 returns exactly the right 5 ids in ascending order
+    with `next_cursor` pointing at the last one; paging with
+    `since_id=<that next_cursor>` returns exactly the remaining 3 with
+    `next_cursor: null` — the full backlog reconstructed across two calls
+    with no gaps and no duplicates, verified id-by-id, not just a count
+    check.
+  - Edge case: `since_id` set to the latest message's own id → empty
+    result, `next_cursor: null` (nothing missed).
+  - `since_id` confirmed to actually take precedence when both `since_id`
+    and `cursor` are given in the same request, not just documented as such.
+  - Regression check: normal mode (no `since_id`) still returns
+    newest-first descending, unaffected.
+  - **The real-world path verified live, not just the REST equivalent**: the
+    same sync via the WS `list_messages` event returns an identical
+    ascending result set through a real socket connection.
+
+### Mobile integration documentation (2026-08-26)
+- [x] **`docs/MOBILE_INTEGRATION.md`** — a complete, from-source reference
+  for a mobile client integrating against this service: every REST
+  endpoint (method/path/auth/request/response/errors) across all modules
+  (auth, profile, conversations, messages, blocks, calls, attachments) and
+  every WS event on the `/chat` namespace (client→server and
+  server→broadcast, exact payload shapes), compiled directly from the
+  controllers/DTOs/gateway rather than from memory. Also documents: the
+  Basic→JWT→Bearer auth flow and the two supported ways to pass the token
+  on the WS handshake; the room model (personal room joined automatically
+  vs. conversation room joined only while a screen is open, and which
+  events go to which); the client architecture patterns this API is built
+  for (chat-list-from-personal-room, optimistic-send dedup by message
+  `hash`, unread-count bookkeeping, the `since_id` reconnect-sync loop from
+  Phase 8, ref-counted multi-device presence); the bilingual (`en||km`)
+  error format for both REST and WS acks; and four end-to-end example
+  flows (login+connect, open a conversation, optimistic send, leave a
+  screen). Not a task/history log like this file or `CHANGELOG.md` — a
+  stable reference meant to stay accurate as the API evolves, flagged as
+  such in its own footer.
+
+### CALL-008: Global call handling (mobile client support) (2026-08-26)
+
+Client-side "global call handling" checklist (incoming-call UI that
+interrupts any screen, works across Home/Chat List/Chat Detail/other
+screens, foreground/background/terminated app, one vs. multiple devices).
+There's no mobile client in this repo — implementation there is out of
+scope here (confirmed with the user). This entry covers what *is* in
+scope: making sure the backend actually supports that architecture, fixing
+the one gap that surfaced, and documenting the client pattern.
+
+- [x] **Stale call never cleared on disconnect** — `initiateCall` blocks a
+  new invite while a `calls` row is `ringing`/`active`, but nothing ever
+  moved a call out of that state when a participant's socket just dropped
+  (crash, closed tab/app, killed connection) without emitting `call:end`.
+  The call sat stuck forever, permanently blocking new invites in that
+  conversation. Fixed: `ChatGateway.markOffline` now calls
+  `CallsService.endStaleCallsForUser(userId)` once a user has **zero**
+  sockets left (reusing the same `onlineSocketCounts` ref-count presence
+  already uses — so a multi-device user with one dead socket and one live
+  one is correctly left alone), which runs every call they're still
+  `invited`/`ringing`/`joined` on through the existing `endCall` logic.
+  Verified live against the real dev server + DB (not just `tsc`): a caller
+  dropping mid-ring auto-cancels the call and frees the conversation for a
+  new invite; a callee dropping while the caller is still joined correctly
+  leaves the call `active` (not silently killed); the phone-disconnects/
+  web-stays-connected multi-device case correctly leaves the call
+  untouched, only clearing once every device is gone.
+  (`calls.service.ts`, `chat.gateway.ts`)
+
+- [x] **No way to discover an in-progress call without already knowing the
+  conversation** — a client's global `CallManager` needs to hydrate "is
+  there a call waiting for me right now" on cold start, foreground, or
+  socket reconnect, for the case where the `call:invite`/`call:answer`/etc.
+  push was missed entirely because no socket was open yet. The only
+  existing call endpoint (`GET /v1/conversations/:hash/calls`) requires a
+  conversation hash the client may not have. Added
+  `GET /v1/calls/active` — every ringing/active call the current user is a
+  live participant in, across every conversation, scoped to the caller.
+  Shares its participation filter with `endStaleCallsForUser` (factored out
+  as `liveParticipationWhere`) rather than duplicating it.
+  (`calls.controller.ts` — new `ActiveCallsController`, `calls.service.ts`,
+  `calls.module.ts`)
+
+- [x] **Everything else on the checklist was already correct, verified
+  live, not just asserted**: call events are personal-room broadcasts
+  (`notifyUsers`), so a global socket listener gets them with no
+  `conversation:join` required — confirmed by receiving `call:invite`
+  before either party ever joined the conversation room. Duplicate/
+  concurrent-call protection is enforced server-side (`existingCall`
+  check) and re-emitting `call:ring`/`call:answer` is idempotent. Multi-
+  device state is consistent across sockets and across the new REST
+  endpoint. Authorization: a non-member can't invite, a non-participant
+  can't `call:ring`/`call:answer`/`call:end`/relay ICE into a call they're
+  not in, and `GET /v1/calls/active` never leaks another user's calls.
+  Accept/reject/cancel/end lifecycles, ICE relay, and audio vs. video type
+  all round-trip correctly end-to-end. No code changes needed for any of
+  these — see the write-up in §5.9 below for why.
+
+- [x] **`docs/MOBILE_INTEGRATION.md` §3.5 and new §5.9** — documented
+  `GET /v1/calls/active`, and added a "Global call handling" client
+  architecture section mapping every checklist item (global socket
+  listener, global `CallManager`/state, hydration via the new endpoint,
+  incoming-call UI as a root-level overlay, duplicate protection, call-
+  triggered navigation, multi-device state) to the server behavior that
+  backs it, so a client engineer can build against it without re-deriving
+  any of this from the controllers.
+
+**Not in scope here** (confirmed with the user): the actual client-side
+`CallManager`, incoming-call UI, navigation, and screen-level QA
+(Home/Chat List/Chat Detail/other screen, foreground/background/terminated
+app) — those belong in whatever repo builds the mobile/web client.
+
+### Store attachment URLs as relative object keys, not full URLs (2026-08-26)
+
+- [x] **`message_attachments.file_url` stored the full absolute URL
+  verbatim** (scheme + host + bucket + object key), coupling every historical
+  message row to whatever the S3/MinIO endpoint/port/bucket happened to be
+  at send time — a future endpoint or bucket migration would mean rewriting
+  every stored row, not just a config change. Fixed: storage now holds only
+  the relative object key (e.g. `chat-attachments/<uuid>.png`); the full,
+  publicly-fetchable URL is computed at the API-response boundary instead.
+  - New `toAttachmentUrl`/`toAttachmentKey` in
+    `src/common/utils/attachment-url.util.ts` — the single place that
+    builds the public base URL from `S3_ENDPOINT`/`S3_PORT`/`S3_USE_SSL`/
+    `S3_BUCKET` (previously duplicated inline in `AttachmentsService`'s
+    constructor; now computed once there and reused).
+  - Write path: `MessagesService.sendMessage` runs each incoming
+    `attachments[].file_url` through `toAttachmentKey` before persisting.
+    `forwardMessage`'s attachment copy is untouched on purpose — it copies
+    an already-stored row, which is already just a key.
+  - Read path: `MessageAttachmentDto`'s constructor runs the stored value
+    through `toAttachmentUrl` — the one choke point every message
+    response (REST and every WS broadcast) already flows through, so no
+    other call site needed to change.
+  - An attachment URL that isn't one of our own bucket's (a client passing
+    an external image URL directly, which `AttachmentInputDto` already
+    allowed) round-trips unchanged in both directions — `toAttachmentKey`
+    only strips our own public base URL prefix, `toAttachmentUrl` passes
+    any existing `http(s)://` value straight through.
+  - The `POST /v1/attachments/upload` response is unaffected — it still
+    returns a full, immediately-usable URL for the client to preview right
+    after upload; only what gets *persisted* once that URL is attached to
+    a message changed.
+  (`attachment-url.util.ts`, `attachments.service.ts`, `messages.model.ts`,
+  `messages.service.ts`)
+
+  No migration — `message_attachments.file_url` was already a plain
+  `VarChar(255)`; only what's written into it changed, not the column.
+
+  **QA — against the real upload target** (`cdn-dev.moi-tv.net`, not a
+  mock), through the live dev server: upload a file → response is a full
+  `https://` URL; send a message with that URL as an attachment → the
+  message response still returns the identical full URL; queried the DB
+  row directly → confirmed it holds only `chat-attachments/<uuid>.txt`,
+  not the full URL, and that the full URL is exactly the base URL plus
+  that stored key; forwarded that message → the forwarded copy is *also*
+  stored as just the key (not a second full-URL row) and still resolves
+  back to the identical full URL on read; sent a message with an external
+  (non-bucket) URL as its attachment → stored and returned completely
+  unchanged, confirming the prefix-stripping doesn't mangle URLs it
+  doesn't own.
+
 ---
 
 **Next step**: both items in the original QA pass section above, ownership

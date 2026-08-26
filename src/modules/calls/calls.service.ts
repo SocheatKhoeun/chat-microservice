@@ -20,6 +20,17 @@ import {
 } from './calls.model';
 
 const callInclude = { participants: true } as const;
+const liveParticipationWhere = (userId: string) => ({
+  user_id: userId,
+  status: {
+    in: [
+      call_participant_status.invited,
+      call_participant_status.ringing,
+      call_participant_status.joined,
+    ],
+  },
+  call: { status: { in: [call_status.ringing, call_status.active] } },
+});
 
 @Injectable()
 export class CallsService {
@@ -324,6 +335,29 @@ export class CallsService {
     });
 
     return new CallResponseDto(updated);
+  }
+
+  async endStaleCallsForUser(userId: string): Promise<void> {
+    const staleParticipations = await this.prismaService.call_participants.findMany({
+      where: liveParticipationWhere(userId),
+      include: { call: true },
+    });
+
+    for (const participation of staleParticipations) {
+      if (!participation.call.hash) continue; // shouldn't happen — always set on creation
+      await this.endCall(userId, participation.call.hash);
+    }
+  }
+
+  async listActiveCalls(currentUserId: string): Promise<CallListResponseDto> {
+    const participations = await this.prismaService.call_participants.findMany({
+      where: liveParticipationWhere(currentUserId),
+      include: { call: { include: callInclude } },
+      orderBy: { call_id: 'desc' },
+    });
+
+    const data = participations.map((p) => new CallResponseDto(p.call));
+    return new CallListResponseDto({ data, next_cursor: null });
   }
 
   private async getCallForParticipant(userId: string, callHash: string) {

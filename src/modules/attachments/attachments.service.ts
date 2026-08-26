@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Client } from 'minio';
 import { attachment_type } from '../../../generated/prisma/enums';
+import { toAttachmentUrl } from '../../common/utils/attachment-url.util';
 import { UploadedAttachmentDto } from './attachments.model';
 
 @Injectable()
@@ -13,7 +14,6 @@ export class AttachmentsService {
   private readonly logger = new Logger(AttachmentsService.name);
   private readonly client: Client | null = null;
   private readonly bucket = process.env.S3_BUCKET ?? '';
-  private readonly publicBaseUrl: string = '';
 
   constructor() {
     const endPoint = process.env.S3_ENDPOINT;
@@ -31,10 +31,6 @@ export class AttachmentsService {
     const useSSL = (process.env.S3_USE_SSL ?? 'true') !== 'false';
 
     this.client = new Client({ endPoint, port, useSSL, accessKey, secretKey });
-
-    const defaultPort = useSSL ? 443 : 80;
-    const portSuffix = port === defaultPort ? '' : `:${port}`;
-    this.publicBaseUrl = `${useSSL ? 'https' : 'http'}://${endPoint}${portSuffix}/${this.bucket}`;
   }
 
   async upload(
@@ -74,7 +70,7 @@ export class AttachmentsService {
     }
 
     return new UploadedAttachmentDto({
-      file_url: `${this.publicBaseUrl}/${objectName}`,
+      file_url: toAttachmentUrl(objectName),
       file_type: this.detectType(mimeType),
     });
   }

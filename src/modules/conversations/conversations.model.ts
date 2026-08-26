@@ -27,7 +27,8 @@ import { MessageResponseDto } from '../messages/messages.model';
 
 export class StartDirectConversationDto {
   @ApiProperty({
-    description: "The other user's id.",
+    description:
+      "The other user's id. If it doesn't already exist, a new user is created automatically with this id.",
     maxLength: 255,
   })
   @IsString()

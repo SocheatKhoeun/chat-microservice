@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../../core/services/prisma/prisma.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
+import { toAttachmentKey } from '../../common/utils/attachment-url.util';
 import type { Prisma } from '../../../generated/prisma/client';
 import {
   conversation_type,
@@ -76,7 +77,7 @@ export class MessagesService {
         attachments: dto.attachments?.length
           ? {
               create: dto.attachments.map((a) => ({
-                file_url: a.file_url,
+                file_url: toAttachmentKey(a.file_url),
                 file_type: a.file_type,
               })),
             }

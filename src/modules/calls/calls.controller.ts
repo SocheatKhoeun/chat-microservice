@@ -13,11 +13,11 @@ import { CallsService } from './calls.service';
 @ApiTags('Mobile - Calls')
 @ApiBearerAuth()
 @UseGuards(OauthJwtGuard)
-@Controller('v1/conversations')
+@Controller('v1/calls')
 export class CallsController {
   constructor(private readonly callsService: CallsService) {}
 
-  @Get(':conversation_hash/calls')
+  @Get('conversations/:conversation_hash')
   @ApiOperation({
     summary: 'List call history for a conversation (newest first).',
   })
@@ -29,5 +29,14 @@ export class CallsController {
     @Query() query: ListCallsQueryDto,
   ) {
     return this.callsService.listCalls(req.user.id, conversationHash, query);
+  }
+
+  @Get('active')
+  @ApiOperation({
+    summary: 'List every ringing/active call this user is still part of, across every conversation.',
+  })
+  @ApiOkResponse({ type: CallListResponseDto })
+  listActiveCalls(@Req() req: any) {
+    return this.callsService.listActiveCalls(req.user.id);
   }
 }

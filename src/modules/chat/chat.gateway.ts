@@ -170,6 +170,16 @@ export class ChatGateway
         );
       }
 
+      // Best-effort: same reasoning as last_seen_at above — a failure here
+      // shouldn't stop the presence broadcast.
+      try {
+        await this.callsService.endStaleCallsForUser(userId);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to end stale calls for ${userId}: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+
       await this.broadcastPresence(userId, 'presence:offline', lastSeenAt);
     } else {
       this.onlineSocketCounts.set(userId, count);

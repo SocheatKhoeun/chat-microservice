@@ -63,7 +63,11 @@ export class ConversationsController {
     @Req() req: any,
     @Body() dto: StartDirectConversationDto,
   ) {
-    return this.conversationsService.startDirectConversation(req.user.id, dto);
+    return this.conversationsService.startDirectConversation(
+      req.user.id,
+      dto,
+      req.user.oauth_client_id,
+    );
   }
 
   @Post('group')

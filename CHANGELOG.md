@@ -182,8 +182,19 @@
   - Every event broadcasts to the call's own participants via `ChatEventsService.notifyUsers`
     (personal rooms), deliberately narrower than `broadcastToConversation` — not every conversation
     member necessarily has the call UI open.
-  - `GET /v1/conversations/:hash/calls` — call history, cursor-paginated exactly like the messages
+  - `GET /v1/call/conversations/:hash/calls` — call history, cursor-paginated exactly like the messages
     list endpoint (`ListCallsQueryDto`/`CallListResponseDto` mirror their messages equivalents).
+  - `GET /v1/call/active` — every ringing/active call the current user is still part of, across
+    *every* conversation, not scoped to one `conversation_hash`. Added so a client's global call
+    handling (an incoming-call UI/state that has to work no matter which screen is open) can
+    hydrate "is there a call waiting for me right now" on cold start, foreground, or reconnect —
+    the case where the `call:invite`/`call:answer`/etc. socket push was missed entirely because no
+    socket was open yet. Shares its participation filter with the disconnect-cleanup fix below
+    (`liveParticipationWhere`, `calls.service.ts`) rather than duplicating it.
+    `docs/MOBILE_INTEGRATION.md` §5.9 documents the client-side pattern this supports (global
+    socket listener, global `CallManager`/state, incoming-call UI as a root-level overlay,
+    duplicate protection, call-triggered navigation, multi-device state) — everything else on that
+    checklist was already correctly supported server-side, verified live rather than assumed.
   - `chat-test.html` — real Call panel per pane (audio/video select, Start/End call, incoming-call
     banner with Accept/Reject, local + remote `<video>` tiles) using actual `getUserMedia`/
     `RTCPeerConnection`, not simulated signaling.
@@ -231,6 +242,23 @@
   conversation's pinned messages, most-recently-pinned first, capped at 100 with no cursor
   pagination (pinned messages are a small "highlights" set by nature, not the full history).
   `prisma/migrations/20260826060000_add_message_pin/`.
+- **Sync missed messages after reconnect** — `ListMessagesQueryDto`/`ListMessagesWsDto` (REST
+  `GET /v1/conversations/:hash` and WS `list_messages`) get an optional `since_id`: given, listing
+  switches from its normal newest-first/backward-from-`cursor` mode to `id > since_id`, oldest-first
+  (chronological replay order) — "everything I missed while disconnected". Reuses `next_cursor`
+  rather than adding a new field: in sync mode it means "pass this back as `since_id` to keep paging
+  forward through a large backlog" instead of "pass as `cursor` for the next older page"; `null`
+  means fully caught up either way. `since_id` wins if both `since_id` and `cursor` are given. No
+  migration — an audit against a 10-item WS checklist found every other item already correctly
+  supported (personal rooms, on-demand conversation rooms, dedup-safe broadcast delivery, unread
+  counts, delivered/edit/delete/reactions); this was the one real gap.
+- `docs/MOBILE_INTEGRATION.md` — a from-source mobile integration reference: every REST endpoint
+  and every WS event with exact request/response/payload shapes, the Basic→JWT auth flow and WS
+  handshake auth, the room model (personal room vs. on-demand conversation room) and the client
+  architecture patterns it implies (chat-list-from-personal-room, optimistic-send dedup by
+  `hash`, unread-count bookkeeping, `since_id` reconnect-sync loop, multi-device/ref-counted
+  presence), the bilingual (`en||km`) error format, and end-to-end example flows. Distinct from
+  `TASKS.md`/`CHANGELOG.md` — a stable client-facing reference, not a project/history log.
 
 ### Changed
 - **`users.id` is now the external id itself** (`String @id @db.VarChar(255)`) — the separate
@@ -314,6 +342,19 @@
   shortly after. `ChatEventsService` genuinely does need to stay a true singleton — it holds the
   Socket.IO `Server` instance set by `ChatGateway.afterInit()`, and every other module's broadcast
   calls depend on getting that same instance, not a separate module-scoped one.
+- **Attachment URLs are stored as relative object keys, not full URLs** —
+  `message_attachments.file_url` used to hold the full absolute URL (scheme + host + bucket + key)
+  verbatim, coupling every historical message row to whatever the S3/MinIO endpoint/port/bucket
+  happened to be at send time. Storage now holds only the relative key (e.g.
+  `chat-attachments/<uuid>.png`); the full, publicly-fetchable URL is computed at the API-response
+  boundary instead, via new `toAttachmentUrl`/`toAttachmentKey`
+  (`src/common/utils/attachment-url.util.ts` — also now the one place `AttachmentsService` builds
+  its public base URL from, instead of duplicating that formula inline in its constructor).
+  `POST /v1/attachments/upload`'s response is unaffected — still a full, immediately-usable URL for
+  the client to preview right away; only what gets *persisted* once that URL is attached to a
+  message changed. An attachment URL that isn't one of our own bucket's (a client-supplied external
+  image URL, which `AttachmentInputDto` already allowed) round-trips unchanged in both directions.
+  No migration — `file_url` was already a plain `VarChar(255)`, only what's written into it changed.
 
 ### Removed
 - `ws-test.js` and `ws-client.js` (root-level Node CLI testers for the WebSocket API — one
@@ -410,6 +451,19 @@
   `directConversationKey()` util, not raw SQL — MySQL's `_ci` collation sorts case-insensitively
   while JS's `.sort()` doesn't, so a raw-SQL backfill risked computing a different hash than the app
   would at lookup time for some ids).
+- **Stale call never cleared on disconnect** — `initiateCall` blocks a new invite while a `calls`
+  row is `ringing`/`active`, but nothing ever moved a call out of that state when a participant's
+  socket just dropped (crash, closed tab/app, killed connection) without emitting `call:end` — the
+  call sat stuck forever, permanently blocking new invites in that conversation. `ChatGateway
+  .markOffline` now calls `CallsService.endStaleCallsForUser(userId)` once a user has zero sockets
+  left (reusing the same ref-counted `onlineSocketCounts` presence already uses, so a multi-device
+  user with one dead socket and one live one is correctly left alone), running every call they're
+  still `invited`/`ringing`/`joined` on through the existing `endCall` logic. Verified live against
+  the real dev server + DB, not just reasoned about: a caller dropping mid-ring auto-cancels the
+  call and frees the conversation for a new invite; a callee dropping while the caller is still
+  joined correctly leaves the call `active` rather than silently killing it (the caller can still
+  explicitly `call:end` it); the phone-disconnects/web-stays-connected multi-device case correctly
+  leaves the call untouched, only clearing once every device is gone.
 
 ## [0.0.4] - 2026-08-22
 

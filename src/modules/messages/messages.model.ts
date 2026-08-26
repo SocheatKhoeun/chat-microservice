@@ -21,6 +21,7 @@ import type {
   messages,
 } from '../../../generated/prisma/client';
 import { attachment_type, message_type } from '../../../generated/prisma/enums';
+import { toAttachmentUrl } from '../../common/utils/attachment-url.util';
 
 export class AttachmentInputDto {
   @ApiProperty({
@@ -55,7 +56,7 @@ export class MessageAttachmentDto implements Pick<
     attachment: Pick<message_attachments, 'id' | 'file_url' | 'file_type'>,
   ) {
     this.id = attachment.id;
-    this.file_url = attachment.file_url;
+    this.file_url = toAttachmentUrl(attachment.file_url);
     this.file_type = attachment.file_type;
   }
 }
