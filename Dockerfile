@@ -1,24 +1,35 @@
-FROM node:22-alpine3.19 AS base
+FROM node:22-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 RUN npm install -g pnpm@10.30.1
-COPY . /app
 WORKDIR /app
 
 FROM base AS build
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+COPY package.json pnpm-lock.yaml ./
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+
+# .dockerignore keeps node_modules/dist/generated/.env/.git out of this copy.
+COPY . .
+
 RUN pnpm prisma generate
 RUN pnpm run build
 
-FROM node:22-alpine3.19
-RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto-khmer
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-COPY --from=build /app /home/chat/app
+RUN pnpm prune --prod
 
-RUN adduser -D chat
+FROM node:22-alpine AS runner
+RUN apk add --no-cache tini
+WORKDIR /app
+
+RUN addgroup -S chat && adduser -S chat -G chat
+
+COPY --from=build --chown=chat:chat /app/node_modules ./node_modules
+COPY --from=build --chown=chat:chat /app/dist ./dist
+COPY --from=build --chown=chat:chat /app/prisma ./prisma
+COPY --from=build --chown=chat:chat /app/package.json ./package.json
+
 USER chat
-WORKDIR /home/chat/app
 EXPOSE 3000
-CMD ["sh", "-c", "node dist/src/main.js"]
+
+ENTRYPOINT ["tini", "--"]
+CMD ["node", "dist/src/main.js"]
