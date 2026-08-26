@@ -1,0 +1,1870 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chat WebSocket Tester</title>
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161923;
+    --panel-2: #1d2130;
+    --border: #2a2f3f;
+    --text: #e7e9ee;
+    --muted: #8a90a2;
+    --accent: #5b8def;
+    --accent-2: #7c5bef;
+    --good: #3ecf8e;
+    --warn: #e7b93b;
+    --bad: #ef5b5b;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  body { padding: 20px; }
+
+  header { max-width: 1200px; margin: 0 auto 16px; }
+  header h1 { font-size: 18px; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  header code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }
+
+  .toolbar {
+    max-width: 1200px;
+    margin: 0 auto 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .toolbar label { font-size: 12px; color: var(--muted); }
+  .toolbar .field { display: flex; flex-direction: column; gap: 4px; }
+  .toolbar input { width: 220px; }
+  .spacer { flex: 1; }
+
+  .grid {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 860px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .pane {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 560px;
+  }
+  .pane-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pane[data-pane="a"] .pane-head { border-top: 3px solid var(--accent); }
+  .pane[data-pane="b"] .pane-head { border-top: 3px solid var(--accent-2); }
+  .pane-title { font-weight: 600; font-size: 14px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .status-dot.connected { background: var(--good); box-shadow: 0 0 6px var(--good); }
+  .status-dot.error { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+  .status-dot.authenticated { background: var(--warn); }
+  .status-text { font-size: 12px; color: var(--muted); }
+
+  .fields {
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .fields .full { grid-column: 1 / -1; }
+  .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+
+  input, button, select {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 9px;
+    font-size: 13px;
+  }
+  input, select { width: 100%; }
+  input:focus, button:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button {
+    cursor: pointer;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); border-color: var(--border); color: var(--text); font-weight: 500; }
+  button.danger { background: var(--bad); border-color: var(--bad); }
+  .row { display: flex; gap: 8px; }
+  .row.wrap { flex-wrap: wrap; }
+  .row > * { flex: 1; }
+  .row > button, .row > select.role-select { flex: none; }
+  .row > select.role-select { width: 90px; }
+
+  .actions { padding: 10px 14px; display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+
+  details.group-wrap { border-bottom: 1px solid var(--border); }
+  details.group-wrap summary {
+    cursor: pointer;
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    user-select: none;
+  }
+  .group-panel { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .members-list { font-size: 12px; display: flex; flex-direction: column; gap: 3px; margin-top: 2px; }
+  .member-row { padding: 4px 7px; background: var(--panel-2); border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 160px;
+  }
+  .bubble { max-width: 82%; padding: 8px 11px; border-radius: 12px; font-size: 13px; line-height: 1.4; }
+  .bubble.mine { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+  .bubble.theirs { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+  .bubble-meta { font-size: 10px; opacity: 0.75; margin-bottom: 2px; }
+  .bubble-body { white-space: pre-wrap; word-break: break-word; }
+  .bubble-body.deleted { font-style: italic; opacity: 0.7; }
+  .bubble.system { align-self: center; background: transparent; color: var(--muted); font-size: 11px; }
+  .bubble .attachment { margin-top: 4px; font-size: 11px; }
+  .bubble .attachment a { color: inherit; }
+  .bubble-reactions { margin-top: 4px; font-size: 11px; opacity: 0.9; }
+  .bubble-status { margin-top: 2px; font-size: 10px; opacity: 0.7; }
+  .bubble-actions { margin-top: 5px; display: flex; gap: 4px; flex-wrap: wrap; }
+  button.mini { padding: 2px 7px; font-size: 10.5px; font-weight: 500; border-radius: 5px; }
+  button.mini.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .bubble.mine button.mini { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.3); color: #fff; }
+
+  .typing-indicator {
+    height: 18px;
+    padding: 0 14px;
+    font-size: 11px;
+    font-style: italic;
+    color: var(--muted);
+  }
+
+  .call-panel { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  .call-panel select.call-type { flex: none; width: 110px; }
+  .incoming-call {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .incoming-call[hidden] { display: none; }
+  .incoming-call span { flex: 1; }
+  .incoming-call button { flex: none; }
+  .call-status { font-size: 11px; color: var(--muted); min-height: 14px; }
+  .video-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .video-grid .video-cell { position: relative; }
+  .video-grid video {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #000;
+    border-radius: 8px;
+    object-fit: cover;
+    display: block;
+  }
+  .video-grid .video-label {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    font-size: 10px;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 2px 6px;
+    border-radius: 5px;
+    color: #fff;
+  }
+
+  .pending-attachments { padding: 0 14px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 11px; }
+  .chip button { background: none; border: none; color: var(--muted); padding: 0 4px; font-size: 13px; cursor: pointer; line-height: 1; }
+
+  .compose { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; }
+  .compose input { flex: 1; }
+  .compose button.attach-btn { flex: none; width: 38px; }
+
+  details.log-wrap { border-top: 1px solid var(--border); }
+  details.log-wrap summary {
+    cursor: pointer;
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    user-select: none;
+  }
+  .log {
+    max-height: 160px;
+    overflow-y: auto;
+    padding: 0 14px 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .log-line { color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  .log-line.error { color: var(--bad); }
+  .log-line.warn { color: var(--warn); }
+  .log-line.good { color: var(--good); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Chat WebSocket Tester</h1>
+  <p>
+    Two independent panes, each its own login + socket connection, for exercising the <code>/chat</code> namespace
+    and the REST API with two real users side by side: direct + group conversations, presence with last-seen,
+    typing, read receipts, delivery acks, reactions, edit/delete/forward, and MinIO-backed attachment uploads.
+    Requires the API running locally (<code>pnpm start:dev</code>) with CORS allowing this page's origin.
+  </p>
+</header>
+
+<div class="toolbar">
+  <div class="field">
+    <label for="shared-server">Server URL (both panes)</label>
+    <input id="shared-server" value="http://localhost:3000" autocomplete="off" />
+  </div>
+  <button id="apply-server" class="secondary">Apply to both</button>
+  <div class="spacer"></div>
+  <button id="start-conversation" data-starter="a" data-target="b">Start direct A → B</button>
+  <button id="start-conversation-reverse" class="secondary" data-starter="b" data-target="a">Start direct B → A</button>
+</div>
+
+<div class="grid">
+
+  <div class="pane" data-pane="a">
+    <div class="pane-head">
+      <div class="status-dot"></div>
+      <div class="pane-title">User A</div>
+      <div class="status-text">disconnected</div>
+    </div>
+    <div class="fields">
+      <div class="field">
+        <label>Server URL</label>
+        <input class="server" value="http://localhost:3000" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>User ID</label>
+        <input class="user-id" placeholder="e.g. customer_1" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>OAuth client_id</label>
+        <input class="client-id" placeholder="express-app" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>OAuth client_secret</label>
+        <input class="client-secret" type="password" placeholder="client secret" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="row">
+          <button class="login-btn">Login &amp; connect</button>
+          <button class="disconnect-btn secondary" disabled>Disconnect</button>
+        </div>
+      </div>
+    </div>
+    <div class="actions">
+      <div class="field" style="flex:1;">
+        <label>Conversation Hash</label>
+        <input class="conversation-hash" type="text" placeholder="e.g. bDzwj1MhgotgRqAM" autocomplete="off" />
+      </div>
+      <button class="join-btn secondary">Join</button>
+      <button class="leave-btn secondary">Leave</button>
+      <button class="mark-read-btn secondary">Mark read</button>
+      <button class="history-btn secondary">Load history</button>
+    </div>
+    <div class="call-panel">
+      <div class="row wrap">
+        <select class="call-type">
+          <option value="video">🎥 Video call</option>
+          <option value="audio">🎙 Audio call</option>
+        </select>
+        <button class="call-start-btn secondary" disabled>Start call</button>
+        <button class="call-end-btn danger" disabled>End call</button>
+      </div>
+      <div class="incoming-call" hidden>
+        <span class="incoming-call-text"></span>
+        <button class="call-accept-btn">Accept</button>
+        <button class="call-reject-btn secondary">Reject</button>
+      </div>
+      <div class="call-status"></div>
+      <div class="video-grid">
+        <div class="video-cell">
+          <video class="local-video" autoplay playsinline muted></video>
+          <span class="video-label">You</span>
+        </div>
+        <div class="video-cell">
+          <video class="remote-video" autoplay playsinline></video>
+          <span class="video-label">Remote</span>
+        </div>
+      </div>
+    </div>
+    <details class="group-wrap">
+      <summary>Group management</summary>
+      <div class="group-panel">
+        <div class="row wrap">
+          <input class="group-name" placeholder="Group name" autocomplete="off" />
+          <input class="group-members" placeholder="member user ids, comma-separated" autocomplete="off" />
+          <button class="create-group-btn secondary">Create group</button>
+          <button class="update-group-btn secondary">Rename current</button>
+        </div>
+        <div class="row wrap">
+          <button class="list-members-btn secondary">List members</button>
+          <input class="member-id" placeholder="user id (add/remove/role target)" autocomplete="off" />
+          <select class="role-select">
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+            <option value="owner">owner</option>
+          </select>
+        </div>
+        <div class="row wrap">
+          <button class="add-member-btn secondary">Add member</button>
+          <button class="remove-member-btn secondary">Remove member</button>
+          <button class="leave-group-btn secondary">Leave group (self)</button>
+          <button class="set-role-btn secondary">Set role</button>
+        </div>
+        <div class="members-list"></div>
+      </div>
+    </details>
+    <details class="group-wrap">
+      <summary>Settings / block / search (Phase 5)</summary>
+      <div class="group-panel">
+        <div class="row wrap">
+          <button class="mute-btn secondary">Toggle mute</button>
+          <button class="archive-btn secondary">Toggle archive</button>
+          <button class="pin-btn secondary">Toggle pin</button>
+          <button class="settings-refresh-btn secondary">Refresh settings</button>
+        </div>
+        <div class="conv-settings-status muted">No settings loaded.</div>
+        <div class="row wrap">
+          <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="archived-filter" /> archived only</label>
+          <button class="inbox-btn secondary">Load inbox</button>
+        </div>
+        <div class="inbox-list"></div>
+        <div class="row wrap">
+          <input class="block-user-id" placeholder="user id to block/unblock" autocomplete="off" />
+          <button class="block-btn secondary">Block</button>
+          <button class="unblock-btn secondary">Unblock</button>
+          <button class="list-blocked-btn secondary">List blocked</button>
+        </div>
+        <div class="blocked-list"></div>
+        <div class="row wrap">
+          <input class="search-query" placeholder="search text" autocomplete="off" />
+          <button class="search-here-btn secondary">Search this conversation</button>
+          <button class="search-all-btn secondary">Search all conversations</button>
+        </div>
+        <div class="search-results"></div>
+      </div>
+    </details>
+    <div class="messages"></div>
+    <div class="typing-indicator"></div>
+    <div class="pending-attachments"></div>
+    <div class="compose">
+      <input type="file" class="file-input" hidden />
+      <button class="attach-btn secondary" title="Attach a file (uploads to MinIO)" disabled>📎</button>
+      <input class="compose-input" placeholder="Type a message and hit Enter…" disabled autocomplete="off" />
+      <button class="send-btn" disabled>Send</button>
+    </div>
+    <details class="log-wrap">
+      <summary>Event log</summary>
+      <div class="log"></div>
+    </details>
+  </div>
+
+  <div class="pane" data-pane="b">
+    <div class="pane-head">
+      <div class="status-dot"></div>
+      <div class="pane-title">User B</div>
+      <div class="status-text">disconnected</div>
+    </div>
+    <div class="fields">
+      <div class="field">
+        <label>Server URL</label>
+        <input class="server" value="http://localhost:3000" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>User ID</label>
+        <input class="user-id" placeholder="e.g. officer_1" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>OAuth client_id</label>
+        <input class="client-id" placeholder="express-app" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>OAuth client_secret</label>
+        <input class="client-secret" type="password" placeholder="client secret" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="row">
+          <button class="login-btn">Login &amp; connect</button>
+          <button class="disconnect-btn secondary" disabled>Disconnect</button>
+        </div>
+      </div>
+    </div>
+    <div class="actions">
+      <div class="field" style="flex:1;">
+        <label>Conversation Hash</label>
+        <input class="conversation-hash" type="text" placeholder="e.g. bDzwj1MhgotgRqAM" autocomplete="off" />
+      </div>
+      <button class="join-btn secondary">Join</button>
+      <button class="leave-btn secondary">Leave</button>
+      <button class="mark-read-btn secondary">Mark read</button>
+      <button class="history-btn secondary">Load history</button>
+    </div>
+    <div class="call-panel">
+      <div class="row wrap">
+        <select class="call-type">
+          <option value="video">🎥 Video call</option>
+          <option value="audio">🎙 Audio call</option>
+        </select>
+        <button class="call-start-btn secondary" disabled>Start call</button>
+        <button class="call-end-btn danger" disabled>End call</button>
+      </div>
+      <div class="incoming-call" hidden>
+        <span class="incoming-call-text"></span>
+        <button class="call-accept-btn">Accept</button>
+        <button class="call-reject-btn secondary">Reject</button>
+      </div>
+      <div class="call-status"></div>
+      <div class="video-grid">
+        <div class="video-cell">
+          <video class="local-video" autoplay playsinline muted></video>
+          <span class="video-label">You</span>
+        </div>
+        <div class="video-cell">
+          <video class="remote-video" autoplay playsinline></video>
+          <span class="video-label">Remote</span>
+        </div>
+      </div>
+    </div>
+    <details class="group-wrap">
+      <summary>Group management</summary>
+      <div class="group-panel">
+        <div class="row wrap">
+          <input class="group-name" placeholder="Group name" autocomplete="off" />
+          <input class="group-members" placeholder="member user ids, comma-separated" autocomplete="off" />
+          <button class="create-group-btn secondary">Create group</button>
+          <button class="update-group-btn secondary">Rename current</button>
+        </div>
+        <div class="row wrap">
+          <button class="list-members-btn secondary">List members</button>
+          <input class="member-id" placeholder="user id (add/remove/role target)" autocomplete="off" />
+          <select class="role-select">
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+            <option value="owner">owner</option>
+          </select>
+        </div>
+        <div class="row wrap">
+          <button class="add-member-btn secondary">Add member</button>
+          <button class="remove-member-btn secondary">Remove member</button>
+          <button class="leave-group-btn secondary">Leave group (self)</button>
+          <button class="set-role-btn secondary">Set role</button>
+        </div>
+        <div class="members-list"></div>
+      </div>
+    </details>
+    <details class="group-wrap">
+      <summary>Settings / block / search (Phase 5)</summary>
+      <div class="group-panel">
+        <div class="row wrap">
+          <button class="mute-btn secondary">Toggle mute</button>
+          <button class="archive-btn secondary">Toggle archive</button>
+          <button class="pin-btn secondary">Toggle pin</button>
+          <button class="settings-refresh-btn secondary">Refresh settings</button>
+        </div>
+        <div class="conv-settings-status muted">No settings loaded.</div>
+        <div class="row wrap">
+          <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" class="archived-filter" /> archived only</label>
+          <button class="inbox-btn secondary">Load inbox</button>
+        </div>
+        <div class="inbox-list"></div>
+        <div class="row wrap">
+          <input class="block-user-id" placeholder="user id to block/unblock" autocomplete="off" />
+          <button class="block-btn secondary">Block</button>
+          <button class="unblock-btn secondary">Unblock</button>
+          <button class="list-blocked-btn secondary">List blocked</button>
+        </div>
+        <div class="blocked-list"></div>
+        <div class="row wrap">
+          <input class="search-query" placeholder="search text" autocomplete="off" />
+          <button class="search-here-btn secondary">Search this conversation</button>
+          <button class="search-all-btn secondary">Search all conversations</button>
+        </div>
+        <div class="search-results"></div>
+      </div>
+    </details>
+    <div class="messages"></div>
+    <div class="typing-indicator"></div>
+    <div class="pending-attachments"></div>
+    <div class="compose">
+      <input type="file" class="file-input" hidden />
+      <button class="attach-btn secondary" title="Attach a file (uploads to MinIO)" disabled>📎</button>
+      <input class="compose-input" placeholder="Type a message and hit Enter…" disabled autocomplete="off" />
+      <button class="send-btn" disabled>Send</button>
+    </div>
+    <details class="log-wrap">
+      <summary>Event log</summary>
+      <div class="log"></div>
+    </details>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  const STORAGE_KEY = 'chat-tester:v2';
+
+  function loadSaved() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
+    catch { return {}; }
+  }
+  function saveField(paneId, key, value) {
+    try {
+      const all = loadSaved();
+      all[paneId] = all[paneId] || {};
+      all[paneId][key] = value;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    } catch { /* ignore (e.g. storage blocked) */ }
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function extractMessage(data, res) {
+    return Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || res.statusText);
+  }
+
+  function summarizeReactions(reactions) {
+    if (!reactions || !reactions.length) return '';
+    const counts = new Map();
+    for (const r of reactions) counts.set(r.reaction, (counts.get(r.reaction) || 0) + 1);
+    return [...counts.entries()].map(([emoji, n]) => `${escapeHtml(emoji)} ${n}`).join('   ');
+  }
+
+  // Only shown on messages *you* sent — mirrors Messenger's "Delivered"/"Seen by"
+  // under your own bubbles. Seen implies delivered, so seen wins if both are known.
+  function statusLine(m, myUserId) {
+    if (m.sender_id !== myUserId) return '';
+    const others = (ids) => ids.filter((id) => id !== myUserId);
+    const seen = others((m.reads || []).map((r) => r.user_id));
+    const delivered = others((m.deliveries || []).map((d) => d.user_id));
+    if (seen.length) return `👁 Seen by ${seen.map(escapeHtml).join(', ')}`;
+    if (delivered.length) return `✓✓ Delivered to ${delivered.map(escapeHtml).join(', ')}`;
+    return '';
+  }
+
+  function attachmentsHtml(attachments) {
+    if (!attachments || !attachments.length) return '';
+    return attachments.map((a) => {
+      const name = (a.file_url || '').split('/').pop();
+      return `<div class="attachment">📎 <a href="${escapeHtml(a.file_url)}" target="_blank" rel="noopener">${escapeHtml(a.file_type)} — ${escapeHtml(name)}</a></div>`;
+    }).join('');
+  }
+
+  class ChatPane {
+    constructor(root, paneId) {
+      this.root = root;
+      this.paneId = paneId;
+      this.token = null;
+      this.socket = null;
+
+      // message hash -> { message, el }, so WS events (edit/delete/reaction) can
+      // find and repaint an already-rendered bubble instead of re-fetching.
+      this.messages = new Map();
+      this.pendingAttachments = [];
+
+      this.$ = (sel) => root.querySelector(sel);
+      this.statusDot = this.$('.status-dot');
+      this.statusText = this.$('.status-text');
+      this.messagesEl = this.$('.messages');
+      this.logEl = this.$('.log');
+      this.typingEl = this.$('.typing-indicator');
+      this.localVideo = this.$('.local-video');
+      this.remoteVideo = this.$('.remote-video');
+
+      this.typingSent = false;
+      this.typingStopTimer = null;
+      this.remoteTypingTimer = null;
+
+      // Active call, if any: { hash, type, localStream, peers: Map<userId, RTCPeerConnection> }.
+      this.call = null;
+      // A call:invite we haven't accepted/rejected yet: { hash, callerId, type }.
+      this.incomingCall = null;
+      // Offers that arrive via call:ice-candidate before Accept has been
+      // clicked (getUserMedia is async) — keyed by the offering user's id.
+      this.pendingOffers = new Map();
+
+      this.restoreFields();
+      this.bindPersistence();
+      this.bindActions();
+    }
+
+    restoreFields() {
+      const saved = loadSaved()[this.paneId] || {};
+      for (const key of ['server', 'user-id', 'client-id', 'client-secret', 'conversation-hash']) {
+        const el = this.$('.' + key);
+        if (el && saved[key] != null) el.value = saved[key];
+      }
+    }
+
+    bindPersistence() {
+      for (const key of ['server', 'user-id', 'client-id', 'client-secret', 'conversation-hash']) {
+        const el = this.$('.' + key);
+        if (el) el.addEventListener('change', () => saveField(this.paneId, key, el.value));
+      }
+    }
+
+    bindActions() {
+      this.$('.login-btn').addEventListener('click', () => this.loginAndConnect());
+      this.$('.disconnect-btn').addEventListener('click', () => this.disconnect());
+      this.$('.join-btn').addEventListener('click', () => this.join());
+      this.$('.leave-btn').addEventListener('click', () => this.leave());
+      this.$('.mark-read-btn').addEventListener('click', () => this.markRead());
+      this.$('.history-btn').addEventListener('click', () => this.loadHistory());
+      this.$('.send-btn').addEventListener('click', () => this.send());
+      this.$('.compose-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); }
+      });
+      this.$('.compose-input').addEventListener('input', () => this.onTypingInput());
+
+      this.$('.attach-btn').addEventListener('click', () => this.$('.file-input').click());
+      this.$('.file-input').addEventListener('change', (e) => this.onFileChosen(e));
+
+      this.$('.call-start-btn').addEventListener('click', () => this.startCall());
+      this.$('.call-end-btn').addEventListener('click', () => this.endCall());
+      this.$('.call-accept-btn').addEventListener('click', () => this.acceptCall());
+      this.$('.call-reject-btn').addEventListener('click', () => this.rejectCall());
+
+      this.$('.create-group-btn').addEventListener('click', () => this.createGroup());
+      this.$('.update-group-btn').addEventListener('click', () => this.updateGroupName());
+      this.$('.list-members-btn').addEventListener('click', () => this.listMembers());
+      this.$('.add-member-btn').addEventListener('click', () => this.addMember());
+      this.$('.remove-member-btn').addEventListener('click', () => this.removeMember());
+      this.$('.leave-group-btn').addEventListener('click', () => this.leaveGroup());
+      this.$('.set-role-btn').addEventListener('click', () => this.setRole());
+
+      this.$('.mute-btn').addEventListener('click', () => this.toggleConvSetting('is_muted'));
+      this.$('.archive-btn').addEventListener('click', () => this.toggleConvSetting('is_archived'));
+      this.$('.pin-btn').addEventListener('click', () => this.toggleConvSetting('is_pinned'));
+      this.$('.settings-refresh-btn').addEventListener('click', () => this.refreshConvSettings());
+      this.$('.inbox-btn').addEventListener('click', () => this.loadInbox());
+      this.$('.block-btn').addEventListener('click', () => this.blockUser());
+      this.$('.unblock-btn').addEventListener('click', () => this.unblockUser());
+      this.$('.list-blocked-btn').addEventListener('click', () => this.listBlocked());
+      this.$('.search-here-btn').addEventListener('click', () => this.searchMessages('here'));
+      this.$('.search-all-btn').addEventListener('click', () => this.searchMessages('all'));
+    }
+
+    // Emits typing:start at most once per burst of keystrokes, then
+    // typing:stop after 2s of no further input — the client owns the
+    // debounce, the server just relays whatever it's told.
+    onTypingInput() {
+      if (!this.socket || !this.socket.connected) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return;
+
+      if (!this.typingSent) {
+        this.typingSent = true;
+        this.socket.emit('typing:start', { conversation_hash });
+      }
+      clearTimeout(this.typingStopTimer);
+      this.typingStopTimer = setTimeout(() => this.stopTyping(), 2000);
+    }
+
+    stopTyping() {
+      clearTimeout(this.typingStopTimer);
+      if (this.typingSent && this.socket && this.socket.connected) {
+        const conversation_hash = this.conversationHash();
+        if (conversation_hash) this.socket.emit('typing:stop', { conversation_hash });
+      }
+      this.typingSent = false;
+    }
+
+    log(text, level = '') {
+      const line = document.createElement('div');
+      line.className = 'log-line' + (level ? ' ' + level : '');
+      const time = new Date().toLocaleTimeString();
+      line.textContent = `[${time}] ${text}`;
+      this.logEl.appendChild(line);
+      this.logEl.scrollTop = this.logEl.scrollHeight;
+    }
+
+    system(text) {
+      const el = document.createElement('div');
+      el.className = 'bubble system';
+      el.textContent = text;
+      this.messagesEl.appendChild(el);
+      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+    }
+
+    setStatus(state, text) {
+      this.statusDot.className = 'status-dot' + (state ? ' ' + state : '');
+      this.statusText.textContent = text;
+    }
+
+    serverUrl() {
+      return this.$('.server').value.trim().replace(/\/$/, '');
+    }
+
+    userId() {
+      return this.$('.user-id').value.trim();
+    }
+
+    conversationHash() {
+      return this.$('.conversation-hash').value.trim() || null;
+    }
+
+    authHeaders(extra) {
+      return { Authorization: 'Bearer ' + this.token, ...(extra || {}) };
+    }
+
+    async loginAndConnect() {
+      const serverUrl = this.serverUrl();
+      const clientId = this.$('.client-id').value.trim();
+      const clientSecret = this.$('.client-secret').value.trim();
+      const userId = this.userId();
+
+      if (!clientId || !clientSecret) {
+        this.log('client_id and client_secret are required to log in.', 'error');
+        return;
+      }
+
+      this.setStatus('', 'logging in…');
+      this.log(`Logging in as "${userId || '(new anonymous user)'}"…`);
+
+      let data;
+      try {
+        const res = await fetch(`${serverUrl}/api/v1/auth/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Basic ' + btoa(`${clientId}:${clientSecret}`),
+          },
+          body: JSON.stringify(userId ? { user_id: userId } : {}),
+        });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+      } catch (err) {
+        this.log('Login failed: ' + err.message, 'error');
+        this.setStatus('error', 'login failed');
+        return;
+      }
+
+      this.token = data.access_token;
+      this.log('Login OK, got access token.', 'good');
+      this.setStatus('authenticated', 'connecting socket…');
+      this.connectSocket();
+    }
+
+    connectSocket() {
+      if (this.socket) this.socket.disconnect();
+
+      const serverUrl = this.serverUrl();
+      this.socket = io(`${serverUrl}/chat`, {
+        auth: { token: this.token },
+        transports: ['websocket'],
+      });
+
+      this.socket.on('connect', () => {
+        this.log('Socket connected: ' + this.socket.id, 'good');
+        this.setStatus('connected', 'connected · ' + this.socket.id);
+        this.$('.disconnect-btn').disabled = false;
+        this.$('.compose-input').disabled = false;
+        this.$('.send-btn').disabled = false;
+        this.$('.attach-btn').disabled = false;
+        this.$('.call-start-btn').disabled = false;
+      });
+
+      this.socket.on('connect_error', (err) => {
+        this.log('connect_error: ' + err.message, 'error');
+        this.setStatus('error', 'connect error');
+      });
+
+      this.socket.on('disconnect', (reason) => {
+        this.log('Disconnected: ' + reason, 'warn');
+        this.setStatus('', 'disconnected');
+        this.$('.disconnect-btn').disabled = true;
+        this.$('.compose-input').disabled = true;
+        this.$('.send-btn').disabled = true;
+        this.$('.attach-btn').disabled = true;
+        this.$('.call-start-btn').disabled = true;
+        this.typingSent = false;
+        clearTimeout(this.typingStopTimer);
+        clearTimeout(this.remoteTypingTimer);
+        this.typingEl.textContent = '';
+        this.incomingCall = null;
+        this.hideIncomingBanner();
+        this.teardownCall('the socket disconnected');
+      });
+
+      this.socket.on('exception', (e) => {
+        this.log('exception ← ' + JSON.stringify(e), 'error');
+        this.system('⚠ ' + (e?.message || 'exception'));
+      });
+
+      this.socket.on('message:new', (m) => {
+        this.log('message:new ← ' + JSON.stringify(m));
+        this.upsertMessage(m);
+      });
+
+      this.socket.on('message:edited', (m) => {
+        this.log('message:edited ← ' + JSON.stringify(m), 'good');
+        this.upsertMessage(m);
+      });
+
+      this.socket.on('message:deleted', (d) => {
+        this.log('message:deleted ← ' + JSON.stringify(d));
+        this.patchDeleted(d.message_hash);
+      });
+
+      this.socket.on('reaction:added', (r) => {
+        this.log('reaction:added ← ' + JSON.stringify(r));
+        this.patchReaction(r.message_hash, r.user_id, r.reaction);
+      });
+
+      this.socket.on('reaction:removed', (r) => {
+        this.log('reaction:removed ← ' + JSON.stringify(r));
+        this.patchReaction(r.message_hash, r.user_id, null);
+      });
+
+      this.socket.on('message:delivered', (d) => {
+        this.log('message:delivered ← ' + JSON.stringify(d));
+        this.patchDelivery(d.message_hash, d.user_id, d.delivered_at);
+      });
+
+      this.socket.on('message:read', (r) => {
+        this.log('message:read ← ' + JSON.stringify(r));
+        this.system(`✓ ${r.user_id} read up to message #${r.last_read_message_id}`);
+      });
+
+      this.socket.on('typing:start', (t) => {
+        this.log('typing:start ← ' + JSON.stringify(t));
+        clearTimeout(this.remoteTypingTimer);
+        this.typingEl.textContent = `${t.user_id} is typing…`;
+        // Safety net in case typing:stop never arrives (e.g. the other side
+        // disconnects mid-burst) — don't let the indicator stick forever.
+        this.remoteTypingTimer = setTimeout(() => { this.typingEl.textContent = ''; }, 4000);
+      });
+
+      this.socket.on('typing:stop', (t) => {
+        this.log('typing:stop ← ' + JSON.stringify(t));
+        clearTimeout(this.remoteTypingTimer);
+        this.typingEl.textContent = '';
+      });
+
+      // Fires on this pane's *personal* room — proof it works even though this
+      // socket never called conversation:join for the new conversation's room.
+      this.socket.on('conversation_started', (c) => {
+        this.log('conversation_started ← ' + JSON.stringify(c), 'good');
+        this.system(`🔔 ${c.sender_id} started a conversation with you — hash=${c.hash}`);
+        this.$('.conversation-hash').value = c.hash;
+        saveField(this.paneId, 'conversation-hash', c.hash);
+      });
+
+      this.socket.on('group:created', (g) => {
+        this.log('group:created ← ' + JSON.stringify(g), 'good');
+        this.system(`🆕 Added to group "${g.name}" — hash=${g.hash}`);
+      });
+
+      this.socket.on('group:updated', (g) => {
+        this.log('group:updated ← ' + JSON.stringify(g));
+        this.system(`✏️ Group updated: "${g.name}"`);
+      });
+
+      this.socket.on('member:added', (e) => {
+        this.log('member:added ← ' + JSON.stringify(e));
+        this.system(`➕ ${e.member_user_ids.join(', ')} added by ${e.added_by}`);
+      });
+
+      this.socket.on('member:removed', (e) => {
+        this.log('member:removed ← ' + JSON.stringify(e));
+        this.system(`➖ ${e.user_id} removed/left (by ${e.removed_by})`);
+      });
+
+      this.socket.on('member:role_updated', (e) => {
+        this.log('member:role_updated ← ' + JSON.stringify(e));
+        this.system(`🔧 ${e.user_id} role → ${e.role}`);
+      });
+
+      // Fires for anyone this pane shares a conversation with — not scoped
+      // to whichever conversation is currently joined.
+      this.socket.on('presence:online', (p) => {
+        this.log('presence:online ← ' + JSON.stringify(p), 'good');
+        this.system(`🟢 ${p.user_id} is online`);
+      });
+
+      this.socket.on('presence:offline', (p) => {
+        this.log('presence:offline ← ' + JSON.stringify(p));
+        const lastSeen = p.last_seen_at ? ` (last seen ${new Date(p.last_seen_at).toLocaleTimeString()})` : '';
+        this.system(`⚫ ${p.user_id} went offline${lastSeen}`);
+      });
+
+      // --- calls (voice/video signaling) ---
+
+      this.socket.on('call:invite', (c) => {
+        this.log('call:invite ← ' + JSON.stringify(c), 'good');
+        if (c.caller_id === this.userId()) return; // echo of our own outgoing invite
+        if (this.call || this.incomingCall) {
+          this.log(`Ignoring incoming call ${c.hash} — already busy.`, 'warn');
+          return;
+        }
+        this.incomingCall = { hash: c.hash, callerId: c.caller_id, type: c.type };
+        this.showIncomingBanner(`📞 Incoming ${c.type} call from ${c.caller_id}`);
+        this.system(`📞 Incoming ${c.type} call from ${c.caller_id}`);
+      });
+
+      this.socket.on('call:ring', (e) => {
+        this.log('call:ring ← ' + JSON.stringify(e));
+        if (e.user_id === this.userId()) return; // echo of our own call:ring
+        this.setCallStatus(`Ringing on ${e.user_id}'s device…`);
+      });
+
+      this.socket.on('call:answer', (e) => this.onCallAnswerEvent(e));
+      this.socket.on('call:reject', (e) => this.onCallRejectEvent(e));
+      this.socket.on('call:ice-candidate', (e) => this.onCallSignal(e));
+      this.socket.on('call:end', (e) => this.onCallEndEvent(e));
+    }
+
+    disconnect() {
+      if (this.socket) this.socket.disconnect();
+    }
+
+    // --- calls (real getUserMedia + RTCPeerConnection, signaled over the
+    // call:* WS events) -----------------------------------------------------
+    //
+    // The server only relays an explicit SDP *answer* (call:answer) and
+    // opaque targeted signals (call:ice-candidate, target_user_id-addressed,
+    // never inspected server-side). There's no dedicated "send the offer"
+    // event, so the initial SDP offer piggybacks on call:ice-candidate too —
+    // {type: 'offer', sdp} vs a real {candidate} are told apart on shape.
+
+    rtcConfig() {
+      return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    }
+
+    setCallStatus(text) {
+      this.$('.call-status').textContent = text || '';
+    }
+
+    showIncomingBanner(text) {
+      this.$('.incoming-call-text').textContent = text;
+      this.$('.incoming-call').hidden = false;
+    }
+
+    hideIncomingBanner() {
+      this.$('.incoming-call').hidden = true;
+    }
+
+    getLocalStream(type) {
+      const constraints = type === 'video' ? { audio: true, video: true } : { audio: true, video: false };
+      return navigator.mediaDevices.getUserMedia(constraints);
+    }
+
+    createPeerConnection(remoteUserId) {
+      const pc = new RTCPeerConnection(this.rtcConfig());
+
+      pc.onicecandidate = (e) => {
+        // this.call can already be null here if the call ended while a
+        // candidate was in flight — don't throw from inside the callback.
+        if (!e.candidate || !this.call) return;
+        this.socket.emit('call:ice-candidate', {
+          call_hash: this.call.hash,
+          target_user_id: remoteUserId,
+          signal: { candidate: e.candidate },
+        });
+      };
+
+      pc.ontrack = (e) => {
+        if (!this.call) return;
+        this.remoteVideo.srcObject = e.streams[0];
+      };
+
+      pc.onconnectionstatechange = () => {
+        this.log(`RTCPeerConnection(${remoteUserId}) state: ${pc.connectionState}`);
+        if (pc.connectionState === 'connected') this.setCallStatus('Connected 🟢');
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected')
+          this.setCallStatus(`Peer connection ${pc.connectionState} ⚠`);
+      };
+
+      this.call.peers.set(remoteUserId, pc);
+      return pc;
+    }
+
+    async startCall() {
+      if (!this.requireSocket()) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      if (this.call) return this.log('Already in a call.', 'error');
+
+      const type = this.$('.call-type').value;
+
+      let localStream;
+      try {
+        localStream = await this.getLocalStream(type);
+      } catch (err) {
+        return this.log('getUserMedia failed: ' + err.message, 'error');
+      }
+
+      const ack = await this.socket.emitWithAck('call:invite', { conversation_hash, type });
+      this.log('call:invite ack: ' + JSON.stringify(ack), ack.success ? 'good' : 'error');
+      if (!ack.success) {
+        localStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      this.call = { hash: ack.data.hash, type, localStream, peers: new Map() };
+      this.localVideo.srcObject = localStream;
+      this.$('.call-start-btn').disabled = true;
+      this.$('.call-end-btn').disabled = false;
+      this.setCallStatus(`Calling… (call_hash=${ack.data.hash})`);
+      this.system(`📞 You started a ${type} call.`);
+
+      const inviteeIds = ack.data.participants.map((p) => p.user_id).filter((id) => id !== this.userId());
+      for (const targetId of inviteeIds) await this.createOfferTo(targetId);
+    }
+
+    async createOfferTo(targetUserId) {
+      const pc = this.createPeerConnection(targetUserId);
+      this.call.localStream.getTracks().forEach((t) => pc.addTrack(t, this.call.localStream));
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      this.socket.emit('call:ice-candidate', {
+        call_hash: this.call.hash,
+        target_user_id: targetUserId,
+        signal: { type: 'offer', sdp: offer.sdp },
+      });
+      this.log(`Sent offer → ${targetUserId}`);
+    }
+
+    async acceptCall() {
+      if (!this.incomingCall) return;
+      const { hash, callerId, type } = this.incomingCall;
+      this.hideIncomingBanner();
+
+      let localStream;
+      try {
+        localStream = await this.getLocalStream(type);
+      } catch (err) {
+        this.log('getUserMedia failed: ' + err.message, 'error');
+        this.incomingCall = { hash, callerId, type };
+        return this.rejectCall();
+      }
+
+      this.call = { hash, type, localStream, peers: new Map() };
+      this.incomingCall = null;
+      this.localVideo.srcObject = localStream;
+      this.$('.call-start-btn').disabled = true;
+      this.$('.call-end-btn').disabled = false;
+      this.setCallStatus('Connecting…');
+      this.system(`📞 You accepted the call from ${callerId}.`);
+
+      await this.socket.emitWithAck('call:ring', { call_hash: hash });
+
+      // The offer may already have arrived (buffered) while getUserMedia was pending.
+      const bufferedOffer = this.pendingOffers.get(callerId);
+      if (bufferedOffer) {
+        this.pendingOffers.delete(callerId);
+        await this.handleOffer(callerId, bufferedOffer);
+      }
+    }
+
+    rejectCall() {
+      if (!this.incomingCall) return;
+      const { hash, callerId } = this.incomingCall;
+      this.socket.emit('call:reject', { call_hash: hash });
+      this.pendingOffers.delete(callerId);
+      this.incomingCall = null;
+      this.hideIncomingBanner();
+      this.system('📞 You rejected the call.');
+    }
+
+    endCall() {
+      if (!this.call) return;
+      this.socket.emit('call:end', { call_hash: this.call.hash });
+      this.teardownCall('ended');
+    }
+
+    async handleOffer(fromUserId, offerSignal) {
+      const pc = this.createPeerConnection(fromUserId);
+      this.call.localStream.getTracks().forEach((t) => pc.addTrack(t, this.call.localStream));
+      await pc.setRemoteDescription({ type: 'offer', sdp: offerSignal.sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      this.socket.emit('call:answer', {
+        call_hash: this.call.hash,
+        signal: { type: 'answer', sdp: answer.sdp },
+      });
+      this.log(`Answered offer from ${fromUserId}`);
+    }
+
+    async onCallSignal(e) {
+      const signal = e.signal || {};
+      this.log(`call:ice-candidate ← from ${e.user_id} (${signal.type === 'offer' ? 'offer' : 'ice candidate'})`);
+
+      if (signal.type === 'offer') {
+        if (this.call && this.call.hash === e.call_hash) {
+          await this.handleOffer(e.user_id, signal);
+        } else {
+          // Not accepted yet (getUserMedia still pending, or Accept not clicked) — buffer it.
+          this.pendingOffers.set(e.user_id, signal);
+        }
+        return;
+      }
+
+      if (signal.candidate && this.call && this.call.hash === e.call_hash) {
+        const pc = this.call.peers.get(e.user_id);
+        if (pc) {
+          try { await pc.addIceCandidate(signal.candidate); }
+          catch (err) { this.log('addIceCandidate failed: ' + err.message, 'error'); }
+        }
+      }
+    }
+
+    async onCallAnswerEvent(e) {
+      this.log(`call:answer ← from ${e.user_id}`, 'good');
+      if (e.user_id === this.userId()) return; // echo of our own answer
+      if (!this.call || e.call_hash !== this.call.hash) return;
+      const pc = this.call.peers.get(e.user_id);
+      if (!pc) return;
+      await pc.setRemoteDescription({ type: 'answer', sdp: e.signal.sdp });
+      this.setCallStatus('Connected 🟢');
+      this.system(`📞 ${e.user_id} answered.`);
+    }
+
+    onCallRejectEvent(e) {
+      this.log('call:reject ← ' + JSON.stringify({ ...e, signal: undefined }), 'warn');
+      if (this.incomingCall && this.incomingCall.hash === e.call_hash) {
+        this.incomingCall = null;
+        this.hideIncomingBanner();
+      }
+      if (e.user_id !== this.userId()) this.system(`📞 ${e.user_id} declined the call.`);
+      // If the call closed out entirely (nobody ever joined), tear our side down too.
+      if (this.call && this.call.hash === e.call_hash && e.status && e.status !== 'ringing' && e.status !== 'active')
+        this.teardownCall(e.status);
+    }
+
+    onCallEndEvent(e) {
+      this.log('call:end ← ' + JSON.stringify(e), 'warn');
+      if (e.user_id !== this.userId()) this.system(`📞 Call ${e.status || 'ended'} (${e.user_id} left).`);
+      if (this.incomingCall && this.incomingCall.hash === e.call_hash) {
+        this.incomingCall = null;
+        this.hideIncomingBanner();
+      }
+      if (this.call && this.call.hash === e.call_hash) this.teardownCall(e.status || 'ended');
+    }
+
+    teardownCall(reason) {
+      // Wrapped in try/finally: a real camera/RTCPeerConnection has more ways
+      // to throw during cleanup than a synthetic test stream does (a track
+      // already ended by the OS, a peer connection mid-negotiation, etc.) —
+      // if that happens mid-cleanup, the UI must still recover (re-enable
+      // "Start call") rather than get stuck on whatever line threw.
+      try {
+        if (this.call) {
+          this.call.localStream.getTracks().forEach((t) => t.stop());
+          this.call.peers.forEach((pc) => pc.close());
+        }
+      } catch (err) {
+        this.log('teardownCall cleanup error (recovered): ' + err.message, 'error');
+      } finally {
+        this.call = null;
+        this.localVideo.srcObject = null;
+        this.remoteVideo.srcObject = null;
+        this.pendingOffers.clear();
+        this.$('.call-start-btn').disabled = !(this.socket && this.socket.connected);
+        this.$('.call-end-btn').disabled = true;
+        this.setCallStatus(reason ? `Call ${reason}.` : '');
+      }
+    }
+
+    // --- message rendering -------------------------------------------------
+
+    upsertMessage(m) {
+      let entry = this.messages.get(m.hash);
+      if (!entry) {
+        const el = document.createElement('div');
+        this.messagesEl.appendChild(el);
+        entry = { message: m, el };
+        this.messages.set(m.hash, entry);
+      } else {
+        entry.message = { ...entry.message, ...m };
+      }
+      this.paintBubble(entry);
+      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      return entry;
+    }
+
+    patchReaction(messageHash, userId, reaction) {
+      const entry = this.messages.get(messageHash);
+      if (!entry) return;
+      const reactions = (entry.message.reactions || []).filter((r) => r.user_id !== userId);
+      if (reaction) reactions.push({ user_id: userId, reaction, created_at: new Date().toISOString() });
+      entry.message.reactions = reactions;
+      this.paintBubble(entry);
+    }
+
+    patchDeleted(messageHash) {
+      const entry = this.messages.get(messageHash);
+      if (!entry) return;
+      entry.message.deleted_at = new Date().toISOString();
+      entry.message.content = null;
+      entry.message.attachments = [];
+      this.paintBubble(entry);
+    }
+
+    patchDelivery(messageHash, userId, deliveredAt) {
+      const entry = this.messages.get(messageHash);
+      if (!entry) return;
+      const deliveries = (entry.message.deliveries || []).filter((d) => d.user_id !== userId);
+      deliveries.push({ user_id: userId, delivered_at: deliveredAt || new Date().toISOString() });
+      entry.message.deliveries = deliveries;
+      this.paintBubble(entry);
+    }
+
+    paintBubble(entry) {
+      const { message: m, el } = entry;
+      const mine = m.sender_id === this.userId();
+      const deleted = !!m.deleted_at;
+      const edited = !!m.edited_at;
+      const time = m.created_at ? new Date(m.created_at).toLocaleTimeString() : '';
+      const reactions = summarizeReactions(m.reactions);
+      const status = statusLine(m, this.userId());
+
+      el.className = 'bubble ' + (mine ? 'mine' : 'theirs');
+      el.dataset.hash = m.hash;
+      el.innerHTML =
+        `<div class="bubble-meta">${escapeHtml(m.sender_id)} · ${time}${edited && !deleted ? ' · edited' : ''}</div>` +
+        `<div class="bubble-body${deleted ? ' deleted' : ''}">${deleted ? 'This message was deleted' : escapeHtml(m.content || '')}</div>` +
+        (deleted ? '' : attachmentsHtml(m.attachments)) +
+        (deleted || !reactions ? '' : `<div class="bubble-reactions">${reactions}</div>`) +
+        (deleted || !status ? '' : `<div class="bubble-status">${status}</div>`) +
+        (deleted ? '' :
+          `<div class="bubble-actions">
+            <button class="mini secondary react-btn">React</button>
+            <button class="mini secondary unreact-btn">Unreact</button>
+            <button class="mini secondary forward-btn">Forward</button>
+            ${!mine ? '<button class="mini secondary delivered-btn">Mark delivered</button>' : ''}
+            ${mine ? '<button class="mini secondary edit-btn">Edit</button><button class="mini danger delete-btn">Delete</button>' : ''}
+          </div>`);
+
+      el.querySelector('.react-btn')?.addEventListener('click', () => this.reactToMessage(m.hash));
+      el.querySelector('.unreact-btn')?.addEventListener('click', () => this.unreactToMessage(m.hash));
+      el.querySelector('.forward-btn')?.addEventListener('click', () => this.forwardMessage(m.hash));
+      el.querySelector('.delivered-btn')?.addEventListener('click', () => this.markMessageDelivered(m.hash));
+      el.querySelector('.edit-btn')?.addEventListener('click', () => this.editMessage(m.hash, m.content));
+      el.querySelector('.delete-btn')?.addEventListener('click', () => this.deleteMessage(m.hash));
+    }
+
+    requireSocket() {
+      if (!this.socket || !this.socket.connected) {
+        this.log('Not connected yet — log in first.', 'error');
+        return false;
+      }
+      return true;
+    }
+
+    async join() {
+      if (!this.requireSocket()) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+
+      const ack = await this.socket.emitWithAck('conversation:join', { conversation_hash });
+      this.log('conversation:join ack: ' + JSON.stringify(ack), ack.success ? 'good' : 'error');
+      if (ack.success) this.system(`Joined conversation ${conversation_hash}`);
+    }
+
+    async leave() {
+      if (!this.requireSocket()) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return;
+
+      const ack = await this.socket.emitWithAck('conversation:leave', { conversation_hash });
+      this.log('conversation:leave ack: ' + JSON.stringify(ack));
+      if (ack.success) this.system(`Left conversation ${conversation_hash}`);
+    }
+
+    async markRead() {
+      if (!this.requireSocket()) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+
+      const ack = await this.socket.emitWithAck('message:read', { conversation_hash });
+      this.log('message:read ack: ' + JSON.stringify(ack), ack.success ? 'good' : 'error');
+    }
+
+    async loadHistory() {
+      if (!this.requireSocket()) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+
+      const ack = await this.socket.emitWithAck('list_messages', { conversation_hash, limit: 30 });
+      this.log('list_messages ack: ' + JSON.stringify(ack), ack.success ? 'good' : 'error');
+      if (!ack.success) return;
+
+      this.messagesEl.innerHTML = '';
+      this.messages.clear();
+      for (const m of [...ack.data.data].reverse()) this.upsertMessage(m);
+      this.system(`Loaded ${ack.data.data.length} message(s)`);
+    }
+
+    async send() {
+      if (!this.requireSocket()) return;
+      const input = this.$('.compose-input');
+      const body = input.value.trim();
+      if (!body && this.pendingAttachments.length === 0) return;
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+
+      this.stopTyping();
+
+      const payload = { conversation_hash, body: body || '(attachment)' };
+      if (this.pendingAttachments.length) payload.attachments = this.pendingAttachments;
+
+      const ack = await this.socket.emitWithAck('message:send', payload);
+      this.log('message:send ack: ' + JSON.stringify(ack), ack.success ? 'good' : 'error');
+      if (ack.success) {
+        input.value = '';
+        this.pendingAttachments = [];
+        this.renderPendingAttachments();
+      }
+    }
+
+    // --- attachments (MinIO upload) ----------------------------------------
+
+    async onFileChosen(e) {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (!this.token) return this.log('Log in first.', 'error');
+
+      this.log(`Uploading ${file.name} (${file.type || 'unknown type'}, ${file.size}B)…`);
+      const form = new FormData();
+      form.append('file', file);
+
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/attachments/upload`, {
+          method: 'POST',
+          headers: this.authHeaders(),
+          body: form,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('Uploaded: ' + JSON.stringify(data), 'good');
+        this.pendingAttachments.push(data);
+        this.renderPendingAttachments();
+      } catch (err) {
+        this.log('Upload failed: ' + err.message, 'error');
+      }
+    }
+
+    renderPendingAttachments() {
+      const el = this.$('.pending-attachments');
+      el.innerHTML = this.pendingAttachments.map((a, i) => {
+        const name = (a.file_url || '').split('/').pop();
+        return `<span class="chip">${escapeHtml(a.file_type)}: ${escapeHtml(name)}<button data-i="${i}" title="Remove">✕</button></span>`;
+      }).join('');
+      el.querySelectorAll('button[data-i]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          this.pendingAttachments.splice(Number(btn.dataset.i), 1);
+          this.renderPendingAttachments();
+        });
+      });
+    }
+
+    // --- message actions: react/unreact/edit/delete/forward (REST) --------
+
+    async reactToMessage(messageHash) {
+      const conversation_hash = this.conversationHash();
+      const reaction = prompt('Reaction (emoji or short text):', '👍');
+      if (!reaction) return;
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/${messageHash}/reactions`, {
+          method: 'POST',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ reaction }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('reacted: ' + JSON.stringify(data), 'good');
+        this.patchReaction(messageHash, this.userId(), reaction);
+      } catch (err) {
+        this.log('react failed: ' + err.message, 'error');
+      }
+    }
+
+    async unreactToMessage(messageHash) {
+      const conversation_hash = this.conversationHash();
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/${messageHash}/reactions`, {
+          method: 'DELETE',
+          headers: this.authHeaders(),
+        });
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(extractMessage(data, res));
+        }
+        this.log('unreacted ' + messageHash, 'good');
+        this.patchReaction(messageHash, this.userId(), null);
+      } catch (err) {
+        this.log('unreact failed: ' + err.message, 'error');
+      }
+    }
+
+    async markMessageDelivered(messageHash) {
+      const conversation_hash = this.conversationHash();
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/${messageHash}/delivered`, {
+          method: 'POST',
+          headers: this.authHeaders(),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('marked delivered: ' + JSON.stringify(data), 'good');
+        this.patchDelivery(messageHash, this.userId(), data.delivered_at);
+      } catch (err) {
+        this.log('mark delivered failed: ' + err.message, 'error');
+      }
+    }
+
+    async editMessage(messageHash, currentContent) {
+      const conversation_hash = this.conversationHash();
+      const content = prompt('New content:', currentContent || '');
+      if (content == null || !content.trim()) return;
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/${messageHash}`, {
+          method: 'PATCH',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ content }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('edited: ' + JSON.stringify(data), 'good');
+        this.upsertMessage(data);
+      } catch (err) {
+        this.log('edit failed: ' + err.message, 'error');
+      }
+    }
+
+    async deleteMessage(messageHash) {
+      if (!confirm('Delete (unsend) this message?')) return;
+      const conversation_hash = this.conversationHash();
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/${messageHash}`, {
+          method: 'DELETE',
+          headers: this.authHeaders(),
+        });
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(extractMessage(data, res));
+        }
+        this.log('deleted ' + messageHash, 'good');
+        this.patchDeleted(messageHash);
+      } catch (err) {
+        this.log('delete failed: ' + err.message, 'error');
+      }
+    }
+
+    async forwardMessage(messageHash) {
+      const conversation_hash = this.conversationHash();
+      const target = prompt('Forward to conversation hash:');
+      if (!target) return;
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/${messageHash}/forward`, {
+          method: 'POST',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ target_conversation_hash: target }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('forwarded: ' + JSON.stringify(data), 'good');
+        this.system(`Forwarded a message to ${target}`);
+      } catch (err) {
+        this.log('forward failed: ' + err.message, 'error');
+      }
+    }
+
+    // --- group management (REST) -------------------------------------------
+
+    async createGroup() {
+      if (!this.token) return this.log('Log in first.', 'error');
+      const name = this.$('.group-name').value.trim();
+      const membersRaw = this.$('.group-members').value.trim();
+      const member_user_ids = membersRaw.split(',').map((s) => s.trim()).filter(Boolean);
+      if (!name || member_user_ids.length === 0)
+        return this.log('Enter a group name and at least one member user id.', 'error');
+
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/group`, {
+          method: 'POST',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ name, member_user_ids }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('group created: ' + JSON.stringify(data), 'good');
+        this.$('.conversation-hash').value = data.hash;
+        saveField(this.paneId, 'conversation-hash', data.hash);
+        this.system(`Created group "${name}" — hash=${data.hash}`);
+        this.renderMembers(data.members);
+      } catch (err) {
+        this.log('create group failed: ' + err.message, 'error');
+      }
+    }
+
+    async updateGroupName() {
+      const conversation_hash = this.conversationHash();
+      const name = this.$('.group-name').value.trim();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      if (!name) return this.log('Enter a new group name in the "Group name" field first.', 'error');
+
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}`, {
+          method: 'PATCH',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('group updated: ' + JSON.stringify(data), 'good');
+        this.renderMembers(data.members);
+      } catch (err) {
+        this.log('update group failed: ' + err.message, 'error');
+      }
+    }
+
+    async listMembers() {
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/members`, {
+          headers: this.authHeaders(),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('members: ' + JSON.stringify(data), 'good');
+        this.renderMembers(data.data);
+      } catch (err) {
+        this.log('list members failed: ' + err.message, 'error');
+      }
+    }
+
+    renderMembers(members) {
+      const el = this.$('.members-list');
+      el.innerHTML = (members && members.length)
+        ? members.map((m) => {
+            const lastSeen = m.last_seen_at ? `last seen ${new Date(m.last_seen_at).toLocaleTimeString()}` : 'last seen unknown';
+            return `<div class="member-row"><span>${escapeHtml(m.user_id)} <span class="muted">(${lastSeen})</span></span><b>${escapeHtml(m.role || 'member')}</b></div>`;
+          }).join('')
+        : '<div class="muted">No members loaded.</div>';
+    }
+
+    async addMember() {
+      const conversation_hash = this.conversationHash();
+      const userId = this.$('.member-id').value.trim();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      if (!userId) return this.log('Enter a user id to add.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/members`, {
+          method: 'POST',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ member_user_ids: [userId] }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('member added: ' + JSON.stringify(data), 'good');
+        this.renderMembers(data.data);
+      } catch (err) {
+        this.log('add member failed: ' + err.message, 'error');
+      }
+    }
+
+    async removeMember(targetOverride) {
+      const conversation_hash = this.conversationHash();
+      const userId = targetOverride || this.$('.member-id').value.trim();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      if (!userId) return this.log('Enter a user id to remove.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/members/${encodeURIComponent(userId)}`, {
+          method: 'DELETE',
+          headers: this.authHeaders(),
+        });
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(extractMessage(data, res));
+        }
+        this.log('member removed: ' + userId, 'good');
+        this.listMembers();
+      } catch (err) {
+        this.log('remove member failed: ' + err.message, 'error');
+      }
+    }
+
+    leaveGroup() {
+      const self = this.userId();
+      if (!self) return this.log('Set this pane\'s User ID first.', 'error');
+      if (!confirm(`Leave this conversation as ${self}?`)) return;
+      this.removeMember(self);
+    }
+
+    async setRole() {
+      const conversation_hash = this.conversationHash();
+      const userId = this.$('.member-id').value.trim();
+      const role = this.$('.role-select').value;
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      if (!userId) return this.log('Enter a user id to change the role of.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/members/${encodeURIComponent(userId)}`, {
+          method: 'PATCH',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ role }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('role updated: ' + JSON.stringify(data), 'good');
+        this.listMembers();
+      } catch (err) {
+        this.log('set role failed: ' + err.message, 'error');
+      }
+    }
+
+    // --- Phase 5: conversation settings / block / search (REST) -----------
+
+    async toggleConvSetting(key) {
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      try {
+        const current = await this.fetchConvSettings(conversation_hash);
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations/${conversation_hash}/settings`, {
+          method: 'PATCH',
+          headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ [key]: !current[key] }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('settings updated: ' + JSON.stringify(data), 'good');
+        this.renderConvSettings(data);
+      } catch (err) {
+        this.log('update settings failed: ' + err.message, 'error');
+      }
+    }
+
+    // There's no standalone GET for one conversation's settings — they live on
+    // its list item, so pull them from GET /conversations (checking both the
+    // normal and archived views since we don't know which one it's currently in).
+    async fetchConvSettings(conversation_hash) {
+      for (const archived of [false, true]) {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations?archived=${archived}`, { headers: this.authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        const item = (data.data || []).find((c) => c.hash === conversation_hash);
+        if (item) return item;
+      }
+      return { is_muted: false, is_archived: false, is_pinned: false };
+    }
+
+    async refreshConvSettings() {
+      const conversation_hash = this.conversationHash();
+      if (!conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      try {
+        const item = await this.fetchConvSettings(conversation_hash);
+        this.renderConvSettings(item);
+        this.log('settings: ' + JSON.stringify(item), 'good');
+      } catch (err) {
+        this.log('load settings failed: ' + err.message, 'error');
+      }
+    }
+
+    renderConvSettings(s) {
+      const el = this.$('.conv-settings-status');
+      const unread = s.unread_count !== undefined ? ` unread=${s.unread_count}` : '';
+      el.textContent = `muted=${!!s.is_muted} archived=${!!s.is_archived} pinned=${!!s.is_pinned}${unread}`;
+    }
+
+    async loadInbox() {
+      if (!this.token) return this.log('Log in first.', 'error');
+      const archived = this.$('.archived-filter').checked;
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/conversations?archived=${archived}`, { headers: this.authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log(`inbox (archived=${archived}): total_unread_conversations=${data.total_unread_conversations}`, 'good');
+        const el = this.$('.inbox-list');
+        el.innerHTML = (data.data && data.data.length)
+          ? data.data.map((c) => {
+              const flags = [c.is_pinned ? '📌' : '', c.is_muted ? '🔇' : '', c.is_archived ? '🗄' : ''].filter(Boolean).join(' ');
+              return `<div class="member-row"><span>${escapeHtml(c.hash)} ${flags}</span><b>${c.unread_count} unread</b></div>`;
+            }).join('')
+          : '<div class="muted">No conversations.</div>';
+      } catch (err) {
+        this.log('load inbox failed: ' + err.message, 'error');
+      }
+    }
+
+    async blockUser() {
+      const userId = this.$('.block-user-id').value.trim();
+      if (!userId) return this.log('Enter a user id to block.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/users/${encodeURIComponent(userId)}/block`, {
+          method: 'POST',
+          headers: this.authHeaders(),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('blocked: ' + JSON.stringify(data), 'good');
+        this.listBlocked();
+      } catch (err) {
+        this.log('block failed: ' + err.message, 'error');
+      }
+    }
+
+    async unblockUser() {
+      const userId = this.$('.block-user-id').value.trim();
+      if (!userId) return this.log('Enter a user id to unblock.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/users/${encodeURIComponent(userId)}/block`, {
+          method: 'DELETE',
+          headers: this.authHeaders(),
+        });
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(extractMessage(data, res));
+        }
+        this.log('unblocked: ' + userId, 'good');
+        this.listBlocked();
+      } catch (err) {
+        this.log('unblock failed: ' + err.message, 'error');
+      }
+    }
+
+    async listBlocked() {
+      if (!this.token) return this.log('Log in first.', 'error');
+      try {
+        const res = await fetch(`${this.serverUrl()}/api/v1/users/blocked`, { headers: this.authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log('blocked list: ' + JSON.stringify(data), 'good');
+        const el = this.$('.blocked-list');
+        el.innerHTML = (data.data && data.data.length)
+          ? data.data.map((b) => `<div class="member-row"><span>${escapeHtml(b.user_id)}</span><span class="muted">${new Date(b.created_at).toLocaleString()}</span></div>`).join('')
+          : '<div class="muted">No blocked users.</div>';
+      } catch (err) {
+        this.log('list blocked failed: ' + err.message, 'error');
+      }
+    }
+
+    async searchMessages(scope) {
+      const q = this.$('.search-query').value.trim();
+      if (!q) return this.log('Enter search text.', 'error');
+      const conversation_hash = this.conversationHash();
+      if (scope === 'here' && !conversation_hash) return this.log('Enter a conversation hash first.', 'error');
+      const path = scope === 'here'
+        ? `/api/v1/conversations/${conversation_hash}/search?q=${encodeURIComponent(q)}`
+        : `/api/v1/conversations/search/messages?q=${encodeURIComponent(q)}`;
+      try {
+        const res = await fetch(`${this.serverUrl()}${path}`, { headers: this.authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(extractMessage(data, res));
+        this.log(`search (${scope}) results: ${data.data.length}`, 'good');
+        const el = this.$('.search-results');
+        el.innerHTML = (data.data && data.data.length)
+          ? data.data.map((m) => `<div class="member-row"><span>${escapeHtml(m.sender_id)}: ${escapeHtml(m.content || '(no content)')}</span><span class="muted">conv #${m.conversation_id}</span></div>`).join('')
+          : '<div class="muted">No matches.</div>';
+      } catch (err) {
+        this.log('search failed: ' + err.message, 'error');
+      }
+    }
+  }
+
+  const paneA = new ChatPane(document.querySelector('.pane[data-pane="a"]'), 'a');
+  const paneB = new ChatPane(document.querySelector('.pane[data-pane="b"]'), 'b');
+  // Exposed for convenience when poking at pane state from devtools while testing.
+  window.paneA = paneA;
+  window.paneB = paneB;
+
+  document.getElementById('apply-server').addEventListener('click', () => {
+    const url = document.getElementById('shared-server').value.trim();
+    for (const pane of [paneA, paneB]) {
+      pane.$('.server').value = url;
+      saveField(pane.paneId, 'server', url);
+    }
+  });
+
+  const panesById = { a: paneA, b: paneB };
+
+  async function startConversation(starterId, targetId) {
+    const starter = panesById[starterId];
+    const target = panesById[targetId];
+    if (!starter.token) return alert(`Log in User ${starterId.toUpperCase()} first.`);
+    const targetUserId = target.userId();
+    if (!targetUserId) return alert(`Enter User ${targetId.toUpperCase()}'s User ID first.`);
+
+    // Deliberately does NOT auto-join either side — the point of this button
+    // is to test that the *other* member finds out over the socket even
+    // though they've never joined this brand-new conversation's room.
+    try {
+      const res = await fetch(`${starter.serverUrl()}/api/v1/conversations/direct`, {
+        method: 'POST',
+        headers: starter.authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ user_id: targetUserId, message: 'Hi 👋' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(extractMessage(data, res));
+
+      starter.$('.conversation-hash').value = data.hash;
+      saveField(starterId, 'conversation-hash', data.hash);
+      starter.log(`Conversation ready: hash=${data.hash}`, 'good');
+      starter.system(`You started a conversation with ${targetUserId} — hash=${data.hash}`);
+      // target's pane fills in its own conversation-hash field via the
+      // conversation_started listener above, IF it's connected — that's
+      // the behavior being demonstrated here.
+    } catch (err) {
+      alert('Failed to start conversation: ' + err.message);
+    }
+  }
+
+  document.getElementById('start-conversation').addEventListener('click', () => startConversation('a', 'b'));
+  document.getElementById('start-conversation-reverse').addEventListener('click', () => startConversation('b', 'a'));
+})();
+</script>
+
+</body>
+</html>

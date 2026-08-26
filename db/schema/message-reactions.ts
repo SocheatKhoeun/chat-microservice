@@ -15,7 +15,7 @@ export const messageReactions = mysqlTable(
     hash: varchar('hash', { length: 255 }).unique(),
     message_id: int('message_id')
       .notNull()
-      .references(() => messages.id),
+      .references(() => messages.id, { onDelete: 'cascade' }),
     user_id: varchar('user_id', { length: 255 })
       .notNull()
       .references(() => users.id),

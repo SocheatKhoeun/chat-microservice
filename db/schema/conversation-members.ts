@@ -16,7 +16,7 @@ export const conversationMembers = mysqlTable(
     id: int('id').autoincrement().primaryKey(),
     conversation_id: int('conversation_id')
       .notNull()
-      .references(() => conversations.id),
+      .references(() => conversations.id, { onDelete: 'cascade' }),
     user_id: varchar('user_id', { length: 255 })
       .notNull()
       .references(() => users.id),

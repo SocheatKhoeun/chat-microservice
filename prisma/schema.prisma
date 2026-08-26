@@ -116,7 +116,7 @@ model conversation_members {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  conversation conversations @relation(fields: [conversation_id], references: [id])
+  conversation conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   user         users         @relation(fields: [user_id], references: [id])
 
   // A user can only have one membership row per conversation. Also what lets
@@ -149,7 +149,7 @@ model messages {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  conversation    conversations         @relation(fields: [conversation_id], references: [id])
+  conversation    conversations         @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   sender          users                 @relation("MessageSender", fields: [sender_id], references: [id])
   pinner          users?                @relation("MessagePinner", fields: [pinned_by], references: [id])
   replied_message messages?             @relation("MessageReplies", fields: [replied_message_id], references: [id])
@@ -171,7 +171,7 @@ model message_reactions {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  message messages @relation(fields: [message_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id], onDelete: Cascade)
   user    users    @relation(fields: [user_id], references: [id])
 
   @@unique([message_id, user_id])
@@ -187,7 +187,7 @@ model message_reads {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  message messages @relation(fields: [message_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id], onDelete: Cascade)
   user    users    @relation(fields: [user_id], references: [id])
 
   // Closes the long-open "duplicate read receipts under concurrency" QA
@@ -208,7 +208,7 @@ model message_deliveries {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  message messages @relation(fields: [message_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id], onDelete: Cascade)
   user    users    @relation(fields: [user_id], references: [id])
 
   // One delivery record per user per message — mirrors message_reactions'
@@ -226,7 +226,7 @@ model message_attachments {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  message messages @relation(fields: [message_id], references: [id])
+  message messages @relation(fields: [message_id], references: [id], onDelete: Cascade)
 
   @@map("message_attachments")
 }
@@ -259,7 +259,7 @@ model calls {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  conversation conversations       @relation(fields: [conversation_id], references: [id])
+  conversation conversations       @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   caller       users               @relation(fields: [caller_id], references: [id])
   participants call_participants[]
 
@@ -277,7 +277,7 @@ model call_participants {
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
-  call calls @relation(fields: [call_id], references: [id])
+  call calls @relation(fields: [call_id], references: [id], onDelete: Cascade)
   user users @relation(fields: [user_id], references: [id])
 
   @@map("call_participants")

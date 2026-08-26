@@ -14,7 +14,7 @@ export const messageReads = mysqlTable(
     id: int('id').autoincrement().primaryKey(),
     message_id: int('message_id')
       .notNull()
-      .references(() => messages.id),
+      .references(() => messages.id, { onDelete: 'cascade' }),
     user_id: varchar('user_id', { length: 255 })
       .notNull()
       .references(() => users.id),

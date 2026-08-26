@@ -12,7 +12,7 @@ export const callParticipants = mysqlTable('call_participants', {
   id: int('id').autoincrement().primaryKey(),
   call_id: int('call_id')
     .notNull()
-    .references(() => calls.id),
+    .references(() => calls.id, { onDelete: 'cascade' }),
   user_id: varchar('user_id', { length: 255 })
     .notNull()
     .references(() => users.id),

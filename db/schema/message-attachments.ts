@@ -5,7 +5,7 @@ export const messageAttachments = mysqlTable('message_attachments', {
   id: int('id').autoincrement().primaryKey(),
   message_id: int('message_id')
     .notNull()
-    .references(() => messages.id),
+    .references(() => messages.id, { onDelete: 'cascade' }),
   file_url: varchar('file_url', { length: 255 }).notNull(),
   file_type: varchar('file_type', { length: 255 }).notNull(),
   created_at: timestamp('created_at').defaultNow().notNull(),

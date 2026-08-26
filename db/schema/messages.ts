@@ -16,7 +16,7 @@ export const messages = mysqlTable('messages', {
   hash: varchar('hash', { length: 255 }).unique(),
   conversation_id: int('conversation_id')
     .notNull()
-    .references(() => conversations.id),
+    .references(() => conversations.id, { onDelete: 'cascade' }),
   sender_id: varchar('sender_id', { length: 255 })
     .notNull()
     .references(() => users.id),
@@ -31,6 +31,7 @@ export const messages = mysqlTable('messages', {
   content: text('content'),
   replied_message_id: int('replied_message_id').references(
     (): AnyMySqlColumn => messages.id,
+    { onDelete: 'set null' },
   ),
   edited_at: timestamp('edited_at'),
   deleted_at: timestamp('deleted_at'),

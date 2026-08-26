@@ -13,7 +13,7 @@ export const calls = mysqlTable('calls', {
   hash: varchar('hash', { length: 255 }).unique(),
   conversation_id: int('conversation_id')
     .notNull()
-    .references(() => conversations.id),
+    .references(() => conversations.id, { onDelete: 'cascade' }),
   caller_id: varchar('caller_id', { length: 255 })
     .notNull()
     .references(() => users.id),
