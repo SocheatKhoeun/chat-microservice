@@ -1,0 +1,33 @@
+# Never let the host's copies leak into the build context — the Dockerfile
+# installs deps and runs `prisma generate` / `nest build` itself, so any
+# stale local copy of these would silently overwrite the fresh one (this is
+# what caused the `./internal/class.ts` MODULE_NOT_FOUND crash: a stale local
+# generated/ folder clobbered the freshly generated Prisma client).
+node_modules
+dist
+generated
+
+# Secrets — must never end up baked into an image layer.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+
+# Editor/OS cruft
+.vscode
+.idea
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Not needed at build or run time
+coverage
+.nyc_output
+test
+README.md
+chat-test.html

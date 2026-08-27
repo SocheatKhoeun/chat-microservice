@@ -435,8 +435,8 @@ Messenger behaves). Only the blocker is notified over WS
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/v1/call/conversations/:hash/calls` | Call history for one conversation, newest first. |
-| `GET` | `/v1/call/active` | This user's ringing/active calls across **every** conversation. |
+| `GET` | `/v1/calls/conversations/:hash` | Call history for one conversation, newest first. |
+| `GET` | `/v1/calls/active` | This user's ringing/active calls across **every** conversation. |
 
 Starting/answering/ending a call itself is **WS-only** — see
 [§4.4](#44-call-signaling-events). These REST endpoints are read-only.
@@ -455,7 +455,7 @@ Starting/answering/ending a call itself is **WS-only** — see
 }
 ```
 
-`/v1/call/active` returns the same shape (`next_cursor` is always `null` —
+`/v1/calls/active` returns the same shape (`next_cursor` is always `null` —
 there's realistically never more than a handful of concurrent calls for one
 user, so it isn't paginated). It exists specifically for **hydrating your
 global call state** — see [§5.9](#59-global-call-handling) — for the cases
@@ -563,28 +563,71 @@ tabs/devices open doesn't flicker offline when they close one.
 
 All WS-only — there is no REST way to start/join/end a call (see
 [§3.5](#35-calls) for history-only REST). One call at a time per
-conversation.
+conversation; no participant-count limit (see the mesh note below before
+you rely on that for large calls).
 
 | Event | Direction | Payload (client→server) | Broadcast payload |
 |---|---|---|---|
-| `call:invite` | C→S | `{ conversation_hash, type: 'audio'\|'video' }` | Full `CallResponseDto` (see §3.5) |
+| `call:invite` | C→S | `{ conversation_hash, type: 'audio'\|'video', participant_user_ids?: string[] }` | Full `CallResponseDto` (see §3.5) |
 | `call:ring` | C→S | `{ call_hash }` | `{ call_hash, user_id }`; ack returns full `CallResponseDto` |
-| `call:answer` | C→S | `{ call_hash, signal }` (SDP answer, opaque) | `{ call_hash, user_id, signal }`; ack returns full `CallResponseDto` |
+| `call:answer` | C→S | `{ call_hash, target_user_id, signal }` (SDP answer, opaque) | **Targeted**: `{ call_hash, user_id, signal }`, delivered only to `target_user_id`'s personal room. Also fires `call:participant-joined` (below) to everyone on the call. Ack returns full `CallResponseDto` |
+| `call:participant-joined` | S→C only | — | `{ call_hash, user_id, status }` — broadcast to every participant when `user_id` answers; carries no SDP |
 | `call:reject` | C→S | `{ call_hash }` | `{ call_hash, user_id, status }`; ack returns full `CallResponseDto` |
 | `call:ice-candidate` | C→S | `{ call_hash, target_user_id, signal }` | Relayed verbatim to `target_user_id`'s personal room only — never conversation-wide |
 | `call:end` | C→S | `{ call_hash }` | `{ call_hash, user_id, status, ended_at }`; ack returns full `CallResponseDto` |
 
-- `call:invite` rings **every** active conversation member (group calls
-  work the same as 1:1 — just more participants).
+- `call:invite` rings **every** active conversation member by default; pass
+  `participant_user_ids` to ring a chosen subset instead. Ids that aren't
+  actual, still-present members of the conversation are silently dropped,
+  not errored — never trust `participant_user_ids` as anything more than a
+  hint of who to ring.
 - `signal` is completely opaque to the server — it's your WebRTC SDP/ICE
   payload, relayed verbatim. The server never inspects it.
 - There's no dedicated "send initial offer" event — piggyback your SDP
   offer on `call:ice-candidate`'s generic targeted-relay channel.
+- **`call:answer` is targeted, not broadcast — `target_user_id` is
+  required.** Pass whichever participant's offer you're answering. This
+  only matters once a call has 3+ participants: broadcasting the SDP
+  answer to everyone (the old behavior) would let a bystander try to apply
+  an answer meant for someone else's peer connection.
+  `call:participant-joined` is the separate, safe-to-broadcast event for
+  "someone joined" — status only, no SDP.
 - The caller can't `call:reject` their own call — use `call:end` to cancel
   before anyone answers.
+- **`call:end` means something different depending on who sends it.** The
+  call's **owner** ending it ends it for **everyone**, even mid a group
+  call with others still on it. Anyone **else** ending it just **leaves** —
+  the call keeps going for the rest as long as ≥2 participants are still
+  `joined`, and only closes out for everyone once it drops below that.
+  Don't assume every `call:end` you receive means the call is over: check
+  `status` in the payload — if it's still `ringing`/`active`, only
+  `user_id` left, so tear down just their peer connection, not your whole
+  call state.
 - Broadcasts go to the call's own participants' **personal rooms**
   (`notifyUsers`), not the conversation room — not every conversation
   member necessarily has the call UI open.
+
+#### Group calls are mesh WebRTC, not an SFU
+
+There's no media server — every participant holds one `RTCPeerConnection`
+per *other* participant. That's fine for a handful of people; it does not
+scale to large calls (each client uploads N-1 streams), and there's
+deliberately no server-side cap stopping you from trying anyway — the real
+ceiling is your users' upload bandwidth and device CPU, not something a
+request parameter can fix. Revisit this (an SFU like mediasoup/LiveKit) if
+group calls become a heavily used, larger-than-a-handful feature.
+
+To form the mesh without two participants ever offering each other at the
+same time:
+- The **caller** offers to every invitee up front, at `call:invite` time,
+  before anyone has answered.
+- **Whoever answers/joins** additionally offers to every *other*
+  participant who is already `joined` at that moment — not the caller
+  again, who already offered to them. Read that list fresh off the
+  `call:ring`/`call:answer` ack's `participants` array; the original
+  `call:invite` payload can be stale by the time you actually join.
+- Everyone else only ever answers incoming offers — nobody initiates
+  toward a newcomer.
 
 ### 4.5 Group & organization events
 
@@ -776,6 +819,18 @@ Don't gate call handling behind "is the chat detail screen for this
 conversation currently open" — per the above, it explicitly isn't required
 to be.
 
+**Group calls.** Everything above is unchanged — one call per conversation,
+one CallManager, personal-room delivery. The only difference is UI and peer
+management: a call can have more than 2 participants (see
+[§4.4](#44-call-signaling-events) for the mesh connection rule), so render
+remote video as a dynamic list keyed by `user_id`, not a fixed local/remote
+pair, and keep one `RTCPeerConnection` per other participant. Watch for
+`call:participant-joined` (someone joined — no media to apply, just update
+state/UI) separately from `call:answer` (the actual SDP you apply to one
+specific peer connection), and remember a `call:end` with `status` still
+`ringing`/`active` means only that one participant left — drop their tile
+and peer connection, not the whole call.
+
 **Multi-device state.** Falls out of [§5.8](#58-multiple-devices) for free:
 every device with a live socket gets the same personal-room events, and
 `GET /v1/call/active` returns identical data no matter which device asks.
@@ -875,7 +930,7 @@ socket.emit('conversation:leave', { conversation_hash });
 
 ---
 
-*Generated against the codebase as of 2026-08-26 — cross-check against the
+*Generated against the codebase as of 2026-08-27 — cross-check against the
 live Swagger docs at `/swagger` for anything REST-shaped if this drifts;
 this file isn't auto-generated and can go stale if the API changes without
 a doc update.*

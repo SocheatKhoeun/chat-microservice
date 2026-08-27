@@ -68,6 +68,13 @@ export class CallInviteDto {
 
   @IsEnum(call_type)
   type!: call_type;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(16)
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  participant_user_ids?: string[];
 }
 
 export class CallActionDto {
@@ -81,7 +88,11 @@ export class CallSignalDto {
   @IsNotEmpty()
   call_hash!: string;
 
-  // The WebRTC SDP answer — opaque to the server, just relayed to the other participants.
+  @IsString()
+  @IsNotEmpty()
+  target_user_id!: string;
+
+  // The WebRTC SDP answer — opaque to the server, just relayed to the target participant.
   @IsDefined()
   signal!: unknown;
 }

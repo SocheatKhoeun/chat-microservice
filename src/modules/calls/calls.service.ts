@@ -74,15 +74,24 @@ export class CallsService {
     currentUserId: string,
     conversationHash: string,
     type: call_type,
+    participantUserIds?: string[],
   ): Promise<CallResponseDto> {
     const conversation = await this.conversationsService.assertMembership(
       conversationHash,
       currentUserId,
     );
 
-    const inviteeIds = conversation.members
-      .filter((member) => !member.left_at && member.user_id !== currentUserId)
-      .map((member) => member.user_id);
+    const memberIds = new Set(
+      conversation.members
+        .filter((member) => !member.left_at && member.user_id !== currentUserId)
+        .map((member) => member.user_id),
+    );
+
+    // The caller can ring a subset of the conversation instead of everyone —
+    // but only actual, still-present members; never trust an arbitrary id.
+    const inviteeIds = participantUserIds
+      ? [...new Set(participantUserIds)].filter((id) => memberIds.has(id))
+      : [...memberIds];
 
     if (inviteeIds.length === 0)
       throw new BadRequestException(
@@ -164,6 +173,7 @@ export class CallsService {
   async answer(
     currentUserId: string,
     callHash: string,
+    targetUserId: string,
     signal: unknown,
   ): Promise<CallResponseDto> {
     const call = await this.getCallForParticipant(currentUserId, callHash);
@@ -177,6 +187,7 @@ export class CallsService {
       );
 
     const participant = this.findParticipant(call, currentUserId);
+    this.findParticipant(call, targetUserId);
 
     await this.prismaService.$transaction([
       this.prismaService.call_participants.update({
@@ -194,11 +205,20 @@ export class CallsService {
     ]);
 
     const updated = await this.reload(call.id);
-    this.broadcast(updated, 'call:answer', {
+
+    this.broadcast(updated, 'call:participant-joined', {
       call_hash: callHash,
       user_id: currentUserId,
-      signal,
+      status: updated.status,
     });
+    this.chatEventsService.safeBroadcast(() =>
+      this.chatEventsService.notifyUser(targetUserId, 'call:answer', {
+        call_hash: callHash,
+        user_id: currentUserId,
+        signal,
+      }),
+    );
+
     return new CallResponseDto(updated);
   }
 
@@ -287,6 +307,7 @@ export class CallsService {
       return new CallResponseDto(call); // already left — idempotent
 
     const wasNeverAnswered = call.status === call_status.ringing;
+    const isOwner = currentUserId === call.caller_id;
 
     await this.prismaService.call_participants.update({
       where: { id: participant.id },
@@ -295,11 +316,11 @@ export class CallsService {
 
     let updated = await this.reload(call.id);
 
-    const anyoneStillJoined = updated.participants.some(
+    const joinedCount = updated.participants.filter(
       (p) => p.status === call_participant_status.joined,
-    );
+    ).length;
 
-    if (!anyoneStillJoined) {
+    if (isOwner || joinedCount < 2) {
       await this.prismaService.$transaction([
         this.prismaService.calls.update({
           where: { id: updated.id },
@@ -322,6 +343,13 @@ export class CallsService {
             },
           },
           data: { status: call_participant_status.missed },
+        }),
+        this.prismaService.call_participants.updateMany({
+          where: {
+            call_id: updated.id,
+            status: call_participant_status.joined,
+          },
+          data: { status: call_participant_status.left, left_at: new Date() },
         }),
       ]);
       updated = await this.reload(call.id);

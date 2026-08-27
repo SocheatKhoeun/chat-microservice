@@ -81,11 +81,6 @@ model conversations {
   description String?            @db.VarChar(255)
   avatar_url  String?            @db.VarChar(255)
   created_by  String?            @db.VarChar(255)
-  // Deterministic, order-independent hash of the two members' user ids —
-  // `direct` conversations only (null for `group`). Backs the unique index
-  // that closes "two near-simultaneous startDirectConversation calls between
-  // the same pair create two separate conversations": see
-  // `directConversationKey()` and `ConversationsService.findOrCreateDirect`.
   direct_key  String?            @unique @db.VarChar(255)
 
   created_at DateTime @default(now())
@@ -119,10 +114,6 @@ model conversation_members {
   conversation conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
   user         users         @relation(fields: [user_id], references: [id])
 
-  // A user can only have one membership row per conversation. Also what lets
-  // startDirectConversation's member insert use skipDuplicates safely when
-  // two concurrent calls both resolve to the same (now-deduplicated)
-  // conversation via direct_key.
   @@unique([conversation_id, user_id])
   @@map("conversation_members")
 }
@@ -137,11 +128,7 @@ model messages {
   replied_message_id Int?
   edited_at          DateTime?
   deleted_at         DateTime?
-  // Message-level pin (distinct from the conversation-level pin on
-  // conversation_members — that pins a *conversation* to the top of the
-  // inbox, this pins one *message* within a conversation, e.g. a shared
-  // link or announcement). Columns here rather than a side table, matching
-  // how conversation-level pin state lives directly on conversation_members.
+
   is_pinned          Boolean       @default(false)
   pinned_at          DateTime?
   pinned_by          String?       @db.VarChar(255)
@@ -190,11 +177,6 @@ model message_reads {
   message messages @relation(fields: [message_id], references: [id], onDelete: Cascade)
   user    users    @relation(fields: [user_id], references: [id])
 
-  // Closes the long-open "duplicate read receipts under concurrency" QA
-  // finding: markConversationRead's check-then-insert had no constraint
-  // backing it, so two concurrent calls (multi-tab, reconnect double-emit)
-  // could both pass the "unread" check and both insert. Empirically
-  // reproduced against the live DB while building message_deliveries above.
   @@unique([message_id, user_id])
   @@map("message_reads")
 }

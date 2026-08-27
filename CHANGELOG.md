@@ -163,9 +163,14 @@
     no one else to call.
   - `call:ring` `{call_hash}` — callee's device is alerting; flips their participant row `invited`
     → `ringing`.
-  - `call:answer` `{call_hash, signal}` — flips the answering participant to `joined`; the first
-    answer flips the call itself to `active` and stamps `answered_at`. `signal` (the SDP answer) is
-    opaque to the server, relayed verbatim.
+  - `call:answer` `{call_hash, target_user_id, signal}` — flips the answering participant to
+    `joined`; the first answer flips the call itself to `active` and stamps `answered_at`.
+    Originally broadcast `signal` to every call participant, which only worked by accident for
+    exactly 2 people (the offerer was the only one holding a peer connection that matched); now
+    delivers the SDP answer only to `target_user_id`'s personal room, and separately broadcasts a
+    new `call:participant-joined` `{call_hash, user_id, status}` (no SDP) to everyone on the call —
+    lifecycle updates ("someone joined") stay broadcast-safe while the actual signal no longer
+    reaches bystanders in a 3+-party call.
   - `call:reject` `{call_hash}` — flips the declining participant to `rejected` (the caller can't
     reject their own call — use `call:end` to cancel). Auto-closes the call as `rejected` if nobody
     else ever joined.
@@ -173,18 +178,33 @@
     only to `target_user_id`'s personal room (never conversation-wide), correct for a mesh WebRTC
     topology. Also carries the initial SDP offer (`{type: 'offer', sdp}`) — there's no separate
     "send offer" event; this generic targeted-relay channel doubles as that.
-  - `call:end` `{call_hash}` — flips the leaving participant to `left`; once nobody is left
-    `joined`, closes the call as `cancelled` (caller hung up before anyone answered) or `ended`
-    (someone had joined), and bulk-flips anyone still `invited`/`ringing` to `missed`. Idempotent.
-  - Group calls: `call:invite` rings every active conversation member, not just one;
-    `call:ice-candidate`'s `target_user_id` lets clients build a pairwise mesh across however many
-    joined.
+  - `call:end` `{call_hash}` — flips the leaving participant to `left`. Two different closing rules
+    depending on who ends it: the call's **owner** ending it force-closes it for everyone regardless
+    of how many others are still `joined` (a real "hang up the call", not just "I'm leaving");
+    anyone else ending it only leaves — the call stays open as long as ≥2 participants remain
+    `joined`, and only then closes as `cancelled` (nobody ever answered) or `ended` (someone had),
+    bulk-flipping any still-`invited`/`ringing` participants to `missed` and any still-`joined`
+    stragglers to `left`. Idempotent. See the matching Fixed entry below — the original version
+    keyed closing on "nobody left `joined`" instead, which stranded a call forever once exactly one
+    of its two participants hung up.
+  - Group calls: `call:invite` takes an optional `participant_user_ids` array to ring a chosen
+    subset of the conversation instead of always ringing everyone (ids that aren't actual,
+    still-present members are silently dropped, never trusted as more than a hint); omitting it
+    keeps the original "ring everyone" behavior. A `MAX_CALL_PARTICIPANTS = 6` cap was added (mesh
+    WebRTC cost is O(n²) per participant) and then **removed again at explicit request** — there is
+    currently no server-side limit on call size, only the physical ceiling of each client's upload
+    bandwidth/CPU once it's actually mesh-connecting. `call:ice-candidate`'s `target_user_id` lets
+    clients build that pairwise mesh across however many joined: the caller offers to every invitee
+    up front at `call:invite` time, and each subsequent joiner additionally offers to every *other*
+    already-`joined` participant (fetched fresh off the `call:ring`/`call:answer` ack, not the
+    original invite payload, which can be stale by join time) — nobody else initiates, so two
+    joiners never offer each other at once.
   - Every event broadcasts to the call's own participants via `ChatEventsService.notifyUsers`
     (personal rooms), deliberately narrower than `broadcastToConversation` — not every conversation
     member necessarily has the call UI open.
-  - `GET /v1/call/conversations/:hash/calls` — call history, cursor-paginated exactly like the messages
+  - `GET /v1/calls/conversations/:hash` — call history, cursor-paginated exactly like the messages
     list endpoint (`ListCallsQueryDto`/`CallListResponseDto` mirror their messages equivalents).
-  - `GET /v1/call/active` — every ringing/active call the current user is still part of, across
+  - `GET /v1/calls/active` — every ringing/active call the current user is still part of, across
     *every* conversation, not scoped to one `conversation_hash`. Added so a client's global call
     handling (an incoming-call UI/state that has to work no matter which screen is open) can
     hydrate "is there a call waiting for me right now" on cold start, foreground, or reconnect —
@@ -195,9 +215,17 @@
     socket listener, global `CallManager`/state, incoming-call UI as a root-level overlay,
     duplicate protection, call-triggered navigation, multi-device state) — everything else on that
     checklist was already correctly supported server-side, verified live rather than assumed.
-  - `chat-test.html` — real Call panel per pane (audio/video select, Start/End call, incoming-call
-    banner with Accept/Reject, local + remote `<video>` tiles) using actual `getUserMedia`/
-    `RTCPeerConnection`, not simulated signaling.
+  - `chat-test.html` — real Call panel per pane (audio/video select, an "Invite (user ids...)" field
+    to pick a subset of participants, Start/End call, incoming-call banner with Accept/Reject) using
+    actual `getUserMedia`/`RTCPeerConnection`, not simulated signaling. Remote video renders as a
+    dynamic per-peer tile grid — the first remote peer reuses the pane's original fixed "Remote"
+    slot, anyone after that gets an appended tile labeled by user id — and a joiner now sends offers
+    to every other already-`joined` participant, not just the caller (see the Group calls bullet
+    above). `call:end` handling now checks `status`: a still-`ringing`/`active` call only drops that
+    one peer's connection/tile (`removePeer`), a terminal status tears the whole call down —
+    previously any `call:end` unconditionally tore down the entire local call state, which would
+    have wrongly ended the call locally for every other participant the moment any one person left a
+    group call.
   - A REST `POST .../calls` to start a call over plain HTTP was tried and then deliberately
     reverted — every step after inviting (`ring`/`answer`/`reject`/`ice-candidate`/`end`) still
     requires a live WS connection anyway, so starting over WS too keeps the whole lifecycle on one
@@ -355,6 +383,12 @@
   message changed. An attachment URL that isn't one of our own bucket's (a client-supplied external
   image URL, which `AttachmentInputDto` already allowed) round-trips unchanged in both directions.
   No migration — `file_url` was already a plain `VarChar(255)`, only what's written into it changed.
+- `docs/MOBILE_INTEGRATION.md` §3.5/§4.4 (Calls) updated to match the group-calling work above:
+  fixed the REST paths (`/v1/call/...` → `/v1/calls/...`, wrong since the doc was first written),
+  documented `call:invite`'s `participant_user_ids`, `call:answer`'s new required `target_user_id`,
+  the new `call:participant-joined` event, the owner-vs-participant `call:end` distinction, and the
+  mesh connection rule (who offers to whom) a real client needs to implement group calls correctly.
+  §3.1 (Profile) deliberately left untouched.
 
 ### Removed
 - `ws-test.js` and `ws-client.js` (root-level Node CLI testers for the WebSocket API — one
@@ -464,6 +498,28 @@
   joined correctly leaves the call `active` rather than silently killing it (the caller can still
   explicitly `call:end` it); the phone-disconnects/web-stays-connected multi-device case correctly
   leaves the call untouched, only clearing once every device is gone.
+- **ICE candidates dropped when they raced ahead of the SDP they depend on** — `chat-test.html`'s
+  `onCallSignal` called `pc.addIceCandidate()` the instant a candidate arrived, but a candidate can
+  (and, reproduced live, sometimes does) arrive before `call:answer`'s SDP has been applied to that
+  same peer connection — `addIceCandidate()` throws ("remote description was null") until
+  `setRemoteDescription()` resolves, and the candidate was just logged as an error and lost, never
+  retried. Enough dropped candidates (often the first, most useful ones) and ICE can't find a
+  working pair before its own timeout, landing the connection in `failed` ~15s later — reproduced
+  live as exactly that. Fixed with a per-remote-user `pendingCandidates` buffer: a candidate that
+  arrives before `pc.remoteDescription` is set is queued instead of applied, and
+  `flushPendingCandidates()` drains it right after `setRemoteDescription()` resolves in both
+  `handleOffer()` (answerer side) and `onCallAnswerEvent()` (offerer side). This is a client bug,
+  not a server one, but the same ordering hazard applies to any real WebRTC client (Flutter
+  included) that doesn't buffer-and-flush candidates the same way.
+- **`call:end` could permanently strand a call at `status: active`** — `endCall` only closed a call
+  out once *nobody* was left `joined`, but both parties end up `joined` once connected (caller
+  auto-joins, callee joins on answer). When one side hung up, only their own participant row flipped
+  to `left` — the other side's client only tears down its own UI locally on receiving `call:end`, it
+  never tells the server it left too — so the call sat stuck at `active` forever, permanently
+  blocking every future `call:invite` in that conversation with "already an active call". Reproduced
+  live end-to-end. Fixed by closing the call once fewer than 2 participants remain `joined` (not
+  zero), and force-flipping any still-`joined` straggler to `left` when it closes — see the
+  `call:end` bullet under Calls above for the owner-vs-participant distinction added alongside this.
 
 ## [0.0.4] - 2026-08-22
 
