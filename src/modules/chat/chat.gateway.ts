@@ -333,6 +333,7 @@ export class ChatGateway
         user.id,
         dto.conversation_hash,
         dto.type,
+        dto.participant_user_ids,
       );
     });
   }
@@ -355,7 +356,12 @@ export class ChatGateway
   ): Promise<WsAck> {
     return this.handle(client, async (user) => {
       const dto = await validateDto(CallSignalDto, body);
-      return this.callsService.answer(user.id, dto.call_hash, dto.signal);
+      return this.callsService.answer(
+        user.id,
+        dto.call_hash,
+        dto.target_user_id,
+        dto.signal,
+      );
     });
   }
 
