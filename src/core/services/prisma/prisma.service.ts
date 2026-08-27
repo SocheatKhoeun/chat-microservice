@@ -7,14 +7,7 @@ import { PrismaClient } from '../../../../generated/prisma/client';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 
 function stripQuotes(value: string): string {
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
+  return value.trim().replace(/^(['"])(.*)\1$/, '$2');
 }
 
 @Injectable()

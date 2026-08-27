@@ -295,11 +295,11 @@ export class CallsService {
 
     let updated = await this.reload(call.id);
 
-    const anyoneStillJoined = updated.participants.some(
+    const joinedCount = updated.participants.filter(
       (p) => p.status === call_participant_status.joined,
-    );
+    ).length;
 
-    if (!anyoneStillJoined) {
+    if (joinedCount < 2) {
       await this.prismaService.$transaction([
         this.prismaService.calls.update({
           where: { id: updated.id },
@@ -322,6 +322,13 @@ export class CallsService {
             },
           },
           data: { status: call_participant_status.missed },
+        }),
+        this.prismaService.call_participants.updateMany({
+          where: {
+            call_id: updated.id,
+            status: call_participant_status.joined,
+          },
+          data: { status: call_participant_status.left, left_at: new Date() },
         }),
       ]);
       updated = await this.reload(call.id);
