@@ -285,13 +285,6 @@ export class RepliedMessageDto implements Pick<
   }
 }
 
-/**
- * What MessageResponseDto needs, from any of the shapes services build a
- * message out of: a full `messageInclude` row (relations always present,
- * possibly empty), or a bare `messages` row from a create() with no
- * `include` at all (relations simply absent — e.g. a conversation's opening
- * message can never have replies/attachments/reactions yet).
- */
 type MessageInput = Pick<
   messages,
   | 'id'
@@ -306,6 +299,7 @@ type MessageInput = Pick<
   | 'is_pinned'
   | 'pinned_at'
   | 'pinned_by'
+  | 'created_at'
 > & {
   replied_message?: Pick<
     messages,
@@ -331,6 +325,7 @@ export class MessageResponseDto implements Pick<
   | 'is_pinned'
   | 'pinned_at'
   | 'pinned_by'
+  | 'created_at'
 > {
   @ApiProperty({ description: 'The internal id of the message.' })
   id: number;
@@ -430,6 +425,9 @@ export class MessageResponseDto implements Pick<
   })
   pinned_by: string | null;
 
+  @ApiProperty({ description: 'When this message was sent.' })
+  created_at: Date;
+
   constructor(message: MessageInput) {
     this.id = message.id;
     this.hash = message.hash;
@@ -456,6 +454,7 @@ export class MessageResponseDto implements Pick<
     this.is_pinned = message.is_pinned;
     this.pinned_at = message.pinned_at;
     this.pinned_by = message.pinned_by;
+    this.created_at = message.created_at;
   }
 }
 
