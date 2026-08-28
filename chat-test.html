@@ -314,6 +314,7 @@
           <option value="video">🎥 Video call</option>
           <option value="audio">🎙 Audio call</option>
         </select>
+        <input class="call-invitees" placeholder="Invite (user ids, comma-separated — blank = everyone)" />
         <button class="call-start-btn secondary" disabled>Start call</button>
         <button class="call-end-btn danger" disabled>End call</button>
       </div>
@@ -452,6 +453,7 @@
           <option value="video">🎥 Video call</option>
           <option value="audio">🎙 Audio call</option>
         </select>
+        <input class="call-invitees" placeholder="Invite (user ids, comma-separated — blank = everyone)" />
         <button class="call-start-btn secondary" disabled>Start call</button>
         <button class="call-end-btn danger" disabled>End call</button>
       </div>
@@ -632,6 +634,13 @@
       // Offers that arrive via call:ice-candidate before Accept has been
       // clicked (getUserMedia is async) — keyed by the offering user's id.
       this.pendingOffers = new Map();
+      // ICE candidates that arrive for a peer before that peer's remote SDP
+      // (offer or answer) has been applied — addIceCandidate() throws until
+      // setRemoteDescription() resolves, and candidates are commonly signaled
+      // right alongside (sometimes ahead of) the SDP itself. Keyed by the
+      // remote user's id; flushed by flushPendingCandidates() once negotiation
+      // catches up.
+      this.pendingCandidates = new Map();
 
       this.restoreFields();
       this.bindPersistence();
@@ -959,6 +968,11 @@
       });
 
       this.socket.on('call:answer', (e) => this.onCallAnswerEvent(e));
+      this.socket.on('call:participant-joined', (e) => {
+        this.log('call:participant-joined ← ' + JSON.stringify(e));
+        if (e.user_id !== this.userId() && this.call && this.call.hash === e.call_hash)
+          this.system(`📞 ${e.user_id} joined the call.`);
+      });
       this.socket.on('call:reject', (e) => this.onCallRejectEvent(e));
       this.socket.on('call:ice-candidate', (e) => this.onCallSignal(e));
       this.socket.on('call:end', (e) => this.onCallEndEvent(e));
@@ -1015,7 +1029,7 @@
 
       pc.ontrack = (e) => {
         if (!this.call) return;
-        this.remoteVideo.srcObject = e.streams[0];
+        this.ensureRemoteVideoEl(remoteUserId).srcObject = e.streams[0];
       };
 
       pc.onconnectionstatechange = () => {
@@ -1029,6 +1043,56 @@
       return pc;
     }
 
+    // Every remote peer gets its own <video> tile in the pane's video-grid,
+    // for group calls with more than one other participant. The first remote
+    // peer reuses the pane's built-in "Remote" slot so a plain 1:1 call looks
+    // exactly like it always did; anyone after that gets a tile appended
+    // dynamically, labeled with their user id.
+    ensureRemoteVideoEl(userId) {
+      if (!this.call.videoEls) this.call.videoEls = new Map();
+      const existing = this.call.videoEls.get(userId);
+      if (existing) return existing;
+
+      if (this.call.videoEls.size === 0) {
+        this.call.videoEls.set(userId, this.remoteVideo);
+        return this.remoteVideo;
+      }
+
+      const grid = this.remoteVideo.closest('.video-grid');
+      const cell = document.createElement('div');
+      cell.className = 'video-cell';
+      const video = document.createElement('video');
+      video.autoplay = true;
+      video.playsInline = true;
+      const label = document.createElement('span');
+      label.className = 'video-label';
+      label.textContent = userId;
+      cell.append(video, label);
+      grid.appendChild(cell);
+      this.call.videoEls.set(userId, video);
+      return video;
+    }
+
+    removeRemoteVideoEl(userId) {
+      if (!this.call || !this.call.videoEls) return;
+      const video = this.call.videoEls.get(userId);
+      if (!video) return;
+      video.srcObject = null;
+      this.call.videoEls.delete(userId);
+      if (video !== this.remoteVideo) video.closest('.video-cell')?.remove();
+    }
+
+    // One participant leaving a group call that's still going for everyone
+    // else — close just that peer connection and its tile, not the whole call.
+    removePeer(userId) {
+      if (!this.call) return;
+      const pc = this.call.peers.get(userId);
+      if (pc) pc.close();
+      this.call.peers.delete(userId);
+      this.pendingCandidates.delete(userId);
+      this.removeRemoteVideoEl(userId);
+    }
+
     async startCall() {
       if (!this.requireSocket()) return;
       const conversation_hash = this.conversationHash();
@@ -1036,6 +1100,10 @@
       if (this.call) return this.log('Already in a call.', 'error');
 
       const type = this.$('.call-type').value;
+      const participant_user_ids = this.$('.call-invitees').value
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
 
       let localStream;
       try {
@@ -1044,7 +1112,11 @@
         return this.log('getUserMedia failed: ' + err.message, 'error');
       }
 
-      const ack = await this.socket.emitWithAck('call:invite', { conversation_hash, type });
+      const ack = await this.socket.emitWithAck('call:invite', {
+        conversation_hash,
+        type,
+        ...(participant_user_ids.length ? { participant_user_ids } : {}),
+      });
       this.log('call:invite ack: ' + JSON.stringify(ack), ack.success ? 'good' : 'error');
       if (!ack.success) {
         localStream.getTracks().forEach((t) => t.stop());
@@ -1097,7 +1169,7 @@
       this.setCallStatus('Connecting…');
       this.system(`📞 You accepted the call from ${callerId}.`);
 
-      await this.socket.emitWithAck('call:ring', { call_hash: hash });
+      const ringAck = await this.socket.emitWithAck('call:ring', { call_hash: hash });
 
       // The offer may already have arrived (buffered) while getUserMedia was pending.
       const bufferedOffer = this.pendingOffers.get(callerId);
@@ -1105,6 +1177,18 @@
         this.pendingOffers.delete(callerId);
         await this.handleOffer(callerId, bufferedOffer);
       }
+
+      // The caller already offers to every invitee up front, so that leg is
+      // covered above. What's missing for a group call is the mesh between
+      // non-caller participants: whoever joins connects to everyone *else*
+      // already joined (fresh from this ack, not the stale invite snapshot),
+      // so both sides end up with exactly one peer connection between them —
+      // the newcomer always initiates, so two joiners never offer each other
+      // at once.
+      const others = (ringAck?.data?.participants || []).filter(
+        (p) => p.status === 'joined' && p.user_id !== callerId && p.user_id !== this.userId(),
+      );
+      for (const other of others) await this.createOfferTo(other.user_id);
     }
 
     rejectCall() {
@@ -1127,13 +1211,27 @@
       const pc = this.createPeerConnection(fromUserId);
       this.call.localStream.getTracks().forEach((t) => pc.addTrack(t, this.call.localStream));
       await pc.setRemoteDescription({ type: 'offer', sdp: offerSignal.sdp });
+      await this.flushPendingCandidates(fromUserId, pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       this.socket.emit('call:answer', {
         call_hash: this.call.hash,
+        target_user_id: fromUserId,
         signal: { type: 'answer', sdp: answer.sdp },
       });
       this.log(`Answered offer from ${fromUserId}`);
+    }
+
+    // Applies any ICE candidates that arrived (and were buffered by
+    // onCallSignal) before this peer's remote SDP was set.
+    async flushPendingCandidates(remoteUserId, pc) {
+      const queued = this.pendingCandidates.get(remoteUserId);
+      if (!queued || queued.length === 0) return;
+      this.pendingCandidates.delete(remoteUserId);
+      for (const candidate of queued) {
+        try { await pc.addIceCandidate(candidate); }
+        catch (err) { this.log('addIceCandidate (buffered) failed: ' + err.message, 'error'); }
+      }
     }
 
     async onCallSignal(e) {
@@ -1152,10 +1250,18 @@
 
       if (signal.candidate && this.call && this.call.hash === e.call_hash) {
         const pc = this.call.peers.get(e.user_id);
-        if (pc) {
-          try { await pc.addIceCandidate(signal.candidate); }
-          catch (err) { this.log('addIceCandidate failed: ' + err.message, 'error'); }
+        if (!pc) return;
+        if (!pc.remoteDescription) {
+          // The offer/answer for this peer hasn't been applied yet —
+          // addIceCandidate() would throw ("remote description was null").
+          // Buffer it; handleOffer()/onCallAnswerEvent() flush this once
+          // setRemoteDescription() resolves.
+          if (!this.pendingCandidates.has(e.user_id)) this.pendingCandidates.set(e.user_id, []);
+          this.pendingCandidates.get(e.user_id).push(signal.candidate);
+          return;
         }
+        try { await pc.addIceCandidate(signal.candidate); }
+        catch (err) { this.log('addIceCandidate failed: ' + err.message, 'error'); }
       }
     }
 
@@ -1166,6 +1272,7 @@
       const pc = this.call.peers.get(e.user_id);
       if (!pc) return;
       await pc.setRemoteDescription({ type: 'answer', sdp: e.signal.sdp });
+      await this.flushPendingCandidates(e.user_id, pc);
       this.setCallStatus('Connected 🟢');
       this.system(`📞 ${e.user_id} answered.`);
     }
@@ -1184,12 +1291,26 @@
 
     onCallEndEvent(e) {
       this.log('call:end ← ' + JSON.stringify(e), 'warn');
-      if (e.user_id !== this.userId()) this.system(`📞 Call ${e.status || 'ended'} (${e.user_id} left).`);
       if (this.incomingCall && this.incomingCall.hash === e.call_hash) {
         this.incomingCall = null;
         this.hideIncomingBanner();
       }
-      if (this.call && this.call.hash === e.call_hash) this.teardownCall(e.status || 'ended');
+      if (!this.call || this.call.hash !== e.call_hash) return;
+
+      // status is still ringing/active — only the sender hung up, the call
+      // (a group call with others still on it) goes on for the rest of us.
+      // Only the owner ending it, or the call dropping below two joined
+      // people, closes it out for everyone (see calls.service.ts#endCall).
+      if (e.status === 'ringing' || e.status === 'active') {
+        if (e.user_id !== this.userId()) {
+          this.system(`📞 ${e.user_id} left the call.`);
+          this.removePeer(e.user_id);
+        }
+        return;
+      }
+
+      if (e.user_id !== this.userId()) this.system(`📞 Call ${e.status || 'ended'} (${e.user_id} ended it).`);
+      this.teardownCall(e.status || 'ended');
     }
 
     teardownCall(reason) {
@@ -1202,6 +1323,11 @@
         if (this.call) {
           this.call.localStream.getTracks().forEach((t) => t.stop());
           this.call.peers.forEach((pc) => pc.close());
+          // Dynamically-added tiles for anyone beyond the first remote peer
+          // (group calls) — the first peer's tile is the pane's own "Remote"
+          // slot and is reset below regardless.
+          if (this.call.videoEls)
+            for (const userId of this.call.videoEls.keys()) this.removeRemoteVideoEl(userId);
         }
       } catch (err) {
         this.log('teardownCall cleanup error (recovered): ' + err.message, 'error');
@@ -1210,6 +1336,7 @@
         this.localVideo.srcObject = null;
         this.remoteVideo.srcObject = null;
         this.pendingOffers.clear();
+        this.pendingCandidates.clear();
         this.$('.call-start-btn').disabled = !(this.socket && this.socket.connected);
         this.$('.call-end-btn').disabled = true;
         this.setCallStatus(reason ? `Call ${reason}.` : '');
