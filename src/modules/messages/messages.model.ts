@@ -21,7 +21,6 @@ import type {
   messages,
 } from '../../../generated/prisma/client';
 import { attachment_type, message_type } from '../../../generated/prisma/enums';
-import { toAttachmentUrl } from '../../common/utils/attachment-url.util';
 
 export class AttachmentInputDto {
   @ApiProperty({
@@ -54,9 +53,10 @@ export class MessageAttachmentDto implements Pick<
 
   constructor(
     attachment: Pick<message_attachments, 'id' | 'file_url' | 'file_type'>,
+    baseUrl: string,
   ) {
     this.id = attachment.id;
-    this.file_url = toAttachmentUrl(attachment.file_url);
+    this.file_url = baseUrl + attachment.file_url;
     this.file_type = attachment.file_type;
   }
 }
@@ -122,11 +122,15 @@ export class MessageDeliveryDto implements Pick<
 }
 
 export class SendMessageDto {
-  @ApiProperty({ description: 'The message content.', maxLength: 5000 })
+  @ApiPropertyOptional({
+    description: 'The message content. Can be empty if there are attachments.',
+    maxLength: 5000,
+  })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(5000)
-  content!: string;
+  content?: string;
 
   @ApiPropertyOptional({
     enum: message_type,
@@ -428,7 +432,7 @@ export class MessageResponseDto implements Pick<
   @ApiProperty({ description: 'When this message was sent.' })
   created_at: Date;
 
-  constructor(message: MessageInput) {
+  constructor(message: MessageInput, baseUrl: string) {
     this.id = message.id;
     this.hash = message.hash;
     this.conversation_id = message.conversation_id;
@@ -442,7 +446,7 @@ export class MessageResponseDto implements Pick<
     this.edited_at = message.edited_at;
     this.deleted_at = message.deleted_at;
     this.attachments = (message.attachments ?? []).map(
-      (attachment) => new MessageAttachmentDto(attachment),
+      (attachment) => new MessageAttachmentDto(attachment, baseUrl),
     );
     this.reactions = (message.reactions ?? []).map(
       (reaction) => new MessageReactionDto(reaction),

@@ -1,36 +1,45 @@
 import { randomUUID } from 'node:crypto';
-import {
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
-import { Client } from 'minio';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Client as MinioClient } from 'minio';
 import { attachment_type } from '../../../generated/prisma/enums';
-import { toAttachmentUrl } from '../../common/utils/attachment-url.util';
+import { SettingService } from '../../core/services/setting/setting.service';
 import { UploadedAttachmentDto } from './attachments.model';
 
 @Injectable()
 export class AttachmentsService {
-  private readonly logger = new Logger(AttachmentsService.name);
-  private readonly client: Client | null = null;
-  private readonly bucket = process.env.S3_BUCKET ?? '';
+  private s3Client!: MinioClient;
+  private bucketName!: string;
+  private initialized = false;
 
-  constructor() {
-    const endPoint = process.env.S3_ENDPOINT;
-    const accessKey = process.env.S3_ACCESS_KEY;
-    const secretKey = process.env.S3_SECRET_KEY;
+  constructor(private readonly settingService: SettingService) {}
 
-    if (!endPoint || !accessKey || !secretKey || !this.bucket) {
-      this.logger.warn(
-        'S3/MinIO storage is not configured — attachment uploads will fail until it is.',
+  private async initS3() {
+    if (this.initialized) return;
+
+    const settings = await this.settingService.getS3Settings();
+
+    if (
+      !settings.s3Endpoint ||
+      !settings.s3AccessKey ||
+      !settings.s3SecretKey ||
+      !settings.s3BucketName
+    ) {
+      throw new InternalServerErrorException(
+        'File storage is not configured!||ការផ្ទុកឯកសារមិនត្រូវបានកំណត់រចនាសម្ព័ន្ធទេ!',
       );
-      return;
     }
 
-    const port = Number(process.env.S3_PORT ?? 443);
-    const useSSL = (process.env.S3_USE_SSL ?? 'true') !== 'false';
+    this.bucketName = settings.s3BucketName;
 
-    this.client = new Client({ endPoint, port, useSSL, accessKey, secretKey });
+    const endpointForClient = settings.s3Endpoint.replace(/^https?:\/\//, '');
+    this.s3Client = new MinioClient({
+      endPoint: endpointForClient,
+      port: settings.s3Port,
+      useSSL: settings.s3UseSsl,
+      accessKey: settings.s3AccessKey,
+      secretKey: settings.s3SecretKey,
+    });
+    this.initialized = true;
   }
 
   async upload(
@@ -38,40 +47,41 @@ export class AttachmentsService {
     originalName: string,
     mimeType: string,
   ): Promise<UploadedAttachmentDto> {
-    if (!this.client)
+    await this.initS3();
+
+    try {
+      const exists = await this.s3Client.bucketExists(this.bucketName);
+      if (!exists) {
+        throw new InternalServerErrorException('S3 bucket does not exist');
+      }
+    } catch (error) {
+      console.log(error);
       throw new InternalServerErrorException(
-        'File storage is not configured!||ការផ្ទុកឯកសារមិនត្រូវបានកំណត់រចនាសម្ព័ន្ធទេ!',
+        'Error accessing S3 bucket!||កំហុសក្នុងការចូលប្រើ S3 bucket!',
       );
+    }
 
     const extension = originalName.includes('.')
       ? originalName.split('.').pop()
       : undefined;
-    const objectName = `chat-attachments/${randomUUID()}${extension ? `.${extension}` : ''}`;
+    const fileType = this.detectType(mimeType);
+    const folder = this.folderFor(fileType);
+    const path = `/${folder}/${randomUUID()}${extension ? `.${extension}` : ''}`;
 
     try {
-      await this.client.putObject(
-        this.bucket,
-        objectName,
-        buffer,
-        buffer.length,
-        {
-          'Content-Type': mimeType,
-        },
-      );
+      await this.s3Client.putObject(this.bucketName, path, buffer, buffer.length, {
+        'Content-Type': mimeType,
+      });
     } catch (error) {
-      this.logger.error(
-        `Failed to upload ${objectName} to bucket ${this.bucket}: ${
-          error instanceof Error ? error.message : error
-        }`,
-      );
+      console.log(error);
       throw new InternalServerErrorException(
         'Failed to upload file!||បរាជ័យក្នុងការផ្ទុកឡើងឯកសារ!',
       );
     }
 
     return new UploadedAttachmentDto({
-      file_url: toAttachmentUrl(objectName),
-      file_type: this.detectType(mimeType),
+      file_url: path,
+      file_type: fileType,
     });
   }
 
@@ -80,5 +90,18 @@ export class AttachmentsService {
     if (mimeType.startsWith('video/')) return attachment_type.video;
     if (mimeType.startsWith('audio/')) return attachment_type.audio;
     return attachment_type.file;
+  }
+
+  private folderFor(fileType: attachment_type): string {
+    switch (fileType) {
+      case attachment_type.image:
+        return 'images';
+      case attachment_type.video:
+        return 'video';
+      case attachment_type.audio:
+        return 'audio';
+      default:
+        return 'files';
+    }
   }
 }

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../core/services/prisma/prisma.service';
+import { SettingService } from '../../core/services/setting/setting.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
 import { directConversationKey } from '../../common/utils/conversation-key.util';
@@ -40,6 +41,7 @@ type ConversationWithMembers = Prisma.conversationsGetPayload<{
 export class ConversationsService {
   constructor(
     private readonly prismaService: PrismaService,
+    private readonly settingService: SettingService,
     private readonly chatEventsService: ChatEventsService,
     private readonly blocksService: BlocksService,
   ) {}
@@ -96,15 +98,19 @@ export class ConversationsService {
       },
     );
 
-    const response = new ConversationResponseDto({
-      id: conversation.id,
-      hash: conversation.hash,
-      type: conversation.type,
-      sender_id: targetUser.id,
-      message,
-      created_at: conversation.created_at,
-      updated_at: conversation.updated_at,
-    });
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const response = new ConversationResponseDto(
+      {
+        id: conversation.id,
+        hash: conversation.hash,
+        type: conversation.type,
+        sender_id: targetUser.id,
+        message,
+        created_at: conversation.created_at,
+        updated_at: conversation.updated_at,
+      },
+      baseUrl,
+    );
 
     this.chatEventsService.safeBroadcast(() =>
       this.chatEventsService.notifyUser(targetUserId, 'conversation_started', {
@@ -155,6 +161,7 @@ export class ConversationsService {
       currentUserId,
       conversationIds,
     );
+    const baseUrl = await this.settingService.getS3PublicUrl();
 
     // conversation_members.user_id already IS the other user's id, so no extra lookup is needed.
     const items = memberships.map((membership) => {
@@ -163,22 +170,25 @@ export class ConversationsService {
         (member) => member.user_id !== currentUserId,
       );
 
-      return new ConversationListItemDto({
-        id: conversation.id,
-        hash: conversation.hash,
-        type: conversation.type,
-        sender_id:
-          conversation.type === conversation_type.direct && otherMember
-            ? otherMember.user_id
-            : null,
-        created_at: conversation.created_at,
-        updated_at: conversation.updated_at,
-        last_message: conversation.messages[0] ?? null,
-        is_muted: membership.is_muted,
-        is_archived: membership.is_archived,
-        is_pinned: membership.is_pinned,
-        unread_count: unreadCounts.get(conversation.id) ?? 0,
-      });
+      return new ConversationListItemDto(
+        {
+          id: conversation.id,
+          hash: conversation.hash,
+          type: conversation.type,
+          sender_id:
+            conversation.type === conversation_type.direct && otherMember
+              ? otherMember.user_id
+              : null,
+          created_at: conversation.created_at,
+          updated_at: conversation.updated_at,
+          last_message: conversation.messages[0] ?? null,
+          is_muted: membership.is_muted,
+          is_archived: membership.is_archived,
+          is_pinned: membership.is_pinned,
+          unread_count: unreadCounts.get(conversation.id) ?? 0,
+        },
+        baseUrl,
+      );
     });
 
     const next_cursor =

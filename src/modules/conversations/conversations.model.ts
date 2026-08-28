@@ -80,20 +80,23 @@ export class ConversationResponseDto implements Pick<
   @ApiProperty({ description: 'When the conversation was last updated.' })
   updated_at: Date;
 
-  constructor(input: {
-    id: number;
-    hash: string;
-    type: conversation_type | null;
-    sender_id: string | null;
-    message: ConstructorParameters<typeof MessageResponseDto>[0];
-    created_at: Date;
-    updated_at: Date;
-  }) {
+  constructor(
+    input: {
+      id: number;
+      hash: string;
+      type: conversation_type | null;
+      sender_id: string | null;
+      message: ConstructorParameters<typeof MessageResponseDto>[0];
+      created_at: Date;
+      updated_at: Date;
+    },
+    baseUrl: string,
+  ) {
     this.id = input.id;
     this.hash = input.hash;
     this.type = input.type;
     this.sender_id = input.sender_id;
-    this.message = new MessageResponseDto(input.message);
+    this.message = new MessageResponseDto(input.message, baseUrl);
     this.created_at = input.created_at;
     this.updated_at = input.updated_at;
   }
@@ -182,19 +185,22 @@ export class ConversationListItemDto implements Pick<
   })
   unread_count: number;
 
-  constructor(input: {
-    id: number;
-    hash: string;
-    type: conversation_type | null;
-    created_at: Date;
-    updated_at: Date;
-    sender_id: string | null;
-    last_message: ConstructorParameters<typeof MessageResponseDto>[0] | null;
-    is_muted: boolean;
-    is_archived: boolean;
-    is_pinned: boolean;
-    unread_count: number;
-  }) {
+  constructor(
+    input: {
+      id: number;
+      hash: string;
+      type: conversation_type | null;
+      created_at: Date;
+      updated_at: Date;
+      sender_id: string | null;
+      last_message: ConstructorParameters<typeof MessageResponseDto>[0] | null;
+      is_muted: boolean;
+      is_archived: boolean;
+      is_pinned: boolean;
+      unread_count: number;
+    },
+    baseUrl: string,
+  ) {
     this.id = input.id;
     this.hash = input.hash;
     this.type = input.type;
@@ -202,7 +208,7 @@ export class ConversationListItemDto implements Pick<
     this.updated_at = input.updated_at;
     this.sender_id = input.sender_id;
     this.last_message = input.last_message
-      ? new MessageResponseDto(input.last_message)
+      ? new MessageResponseDto(input.last_message, baseUrl)
       : null;
     this.is_muted = input.is_muted;
     this.is_archived = input.is_archived;
