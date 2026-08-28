@@ -5,9 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../core/services/prisma/prisma.service';
+import { SettingService } from '../../core/services/setting/setting.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
-import { toAttachmentKey } from '../../common/utils/attachment-url.util';
 import type { Prisma } from '../../../generated/prisma/client';
 import {
   conversation_type,
@@ -33,6 +33,7 @@ import {
 export class MessagesService {
   constructor(
     private readonly prismaService: PrismaService,
+    private readonly settingService: SettingService,
     private readonly conversationsService: ConversationsService,
     private readonly chatEventsService: ChatEventsService,
     private readonly blocksService: BlocksService,
@@ -43,6 +44,11 @@ export class MessagesService {
     conversationHash: string,
     dto: SendMessageDto,
   ): Promise<MessageResponseDto> {
+    if (!dto.content && !dto.attachments?.length)
+      throw new BadRequestException(
+        'A message needs content, an attachment, or both!||សារត្រូវការអត្ថបទ ឬឯកសារភ្ជាប់ណាមួយ!',
+      );
+
     const conversation = await this.conversationsService.assertMembership(
       conversationHash,
       currentUserId,
@@ -77,7 +83,7 @@ export class MessagesService {
         attachments: dto.attachments?.length
           ? {
               create: dto.attachments.map((a) => ({
-                file_url: toAttachmentKey(a.file_url),
+                file_url: a.file_url,
                 file_type: a.file_type,
               })),
             }
@@ -92,7 +98,8 @@ export class MessagesService {
       },
     });
 
-    const response = new MessageResponseDto(created);
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const response = new MessageResponseDto(created, baseUrl);
     this.broadcastToConversation(conversation, 'message:new', response);
 
     return response;
@@ -184,7 +191,10 @@ export class MessagesService {
     const next_cursor =
       found.length === limit ? found[found.length - 1].id : null;
 
-    const data = found.map((message) => new MessageResponseDto(message));
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const data = found.map(
+      (message) => new MessageResponseDto(message, baseUrl),
+    );
 
     return new MessageListResponseDto({ data, next_cursor });
   }
@@ -243,7 +253,10 @@ export class MessagesService {
     const next_cursor =
       found.length === limit ? found[found.length - 1].id : null;
 
-    const data = found.map((message) => new MessageResponseDto(message));
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const data = found.map(
+      (message) => new MessageResponseDto(message, baseUrl),
+    );
 
     return new MessageListResponseDto({ data, next_cursor });
   }
@@ -372,7 +385,8 @@ export class MessagesService {
       },
     });
 
-    const response = new MessageResponseDto(updated);
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const response = new MessageResponseDto(updated, baseUrl);
     this.broadcastToConversation(conversation, 'message:pinned', response);
 
     return response;
@@ -425,7 +439,10 @@ export class MessagesService {
       take: 100,
     });
 
-    const data = found.map((message) => new MessageResponseDto(message));
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const data = found.map(
+      (message) => new MessageResponseDto(message, baseUrl),
+    );
 
     return new MessageListResponseDto({ data, next_cursor: null });
   }
@@ -463,7 +480,8 @@ export class MessagesService {
       },
     });
 
-    const response = new MessageResponseDto(updated);
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const response = new MessageResponseDto(updated, baseUrl);
     this.broadcastToConversation(conversation, 'message:edited', response);
 
     return response;
@@ -554,7 +572,8 @@ export class MessagesService {
       },
     });
 
-    const response = new MessageResponseDto(created);
+    const baseUrl = await this.settingService.getS3PublicUrl();
+    const response = new MessageResponseDto(created, baseUrl);
     this.broadcastToConversation(targetConversation, 'message:new', response);
 
     return response;

@@ -133,9 +133,15 @@
   `attachment_type` from the file's mimetype, uploads to the configured bucket, returns
   `{file_url, file_type}` ready to drop into a message's `attachments`. `src/modules/attachments/`
   (`attachments.service.ts` owns the MinIO client logic directly — deliberately not a separate
-  shared storage service, so upload concerns stay inside the one module that owns them). Config is
-  env-driven (`S3_ENDPOINT`/`S3_PORT`/`S3_USE_SSL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`);
-  missing config logs a warning instead of crashing the app at boot.
+  shared storage service, so upload concerns stay inside the one module that owns them). Config was
+  originally env-driven (`S3_ENDPOINT`/`S3_PORT`/`S3_USE_SSL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/
+  `S3_BUCKET`), later moved to the DB — see the Changed entry below.
+- **A message can be attachment-only** — `SendMessageDto.content` is now optional (`@IsOptional()`,
+  still `@IsNotEmpty()`/`@MaxLength(5000)` when given, so an explicit empty string is still
+  rejected); `MessagesService#sendMessage` throws `BadRequestException` if a message has neither
+  `content` nor a non-empty `attachments` array — a message needs content, an attachment, or both.
+  Checked before `assertMembership`/any DB call, so an invalid send fails fast. No migration —
+  `messages.content` was already nullable (`String? @db.Text`).
 - **Presence & delivery fidelity**:
   - "Delivered" vs "Read" distinction — new `message_deliveries` table (mirrors `message_reads`).
     `POST /v1/conversations/:hash/:message_hash/delivered` acks receipt (idempotent — first ack per
@@ -370,19 +376,35 @@
   shortly after. `ChatEventsService` genuinely does need to stay a true singleton — it holds the
   Socket.IO `Server` instance set by `ChatGateway.afterInit()`, and every other module's broadcast
   calls depend on getting that same instance, not a separate module-scoped one.
-- **Attachment URLs are stored as relative object keys, not full URLs** —
-  `message_attachments.file_url` used to hold the full absolute URL (scheme + host + bucket + key)
-  verbatim, coupling every historical message row to whatever the S3/MinIO endpoint/port/bucket
-  happened to be at send time. Storage now holds only the relative key (e.g.
-  `chat-attachments/<uuid>.png`); the full, publicly-fetchable URL is computed at the API-response
-  boundary instead, via new `toAttachmentUrl`/`toAttachmentKey`
-  (`src/common/utils/attachment-url.util.ts` — also now the one place `AttachmentsService` builds
-  its public base URL from, instead of duplicating that formula inline in its constructor).
-  `POST /v1/attachments/upload`'s response is unaffected — still a full, immediately-usable URL for
-  the client to preview right away; only what gets *persisted* once that URL is attached to a
-  message changed. An attachment URL that isn't one of our own bucket's (a client-supplied external
-  image URL, which `AttachmentInputDto` already allowed) round-trips unchanged in both directions.
-  No migration — `file_url` was already a plain `VarChar(255)`, only what's written into it changed.
+- **Attachment storage: S3 config moved to the DB; bare filename in, full URL only at response
+  time**. Two related changes, iterated a few times before settling:
+  - `AttachmentsService` no longer reads `S3_*` env vars — it now calls
+    `SettingService.getS3Settings()` (`s3_endpoint`/`s3_port`/`s3_use_ssl`/`s3_access_key`/
+    `s3_secret_key`/`s3_bucket_name` rows in `settings`) and builds the Minio client lazily on
+    first upload, caching it on the service instance (`initS3()`/`initialized`, same shape as the
+    reference implementation this was modeled on); `bucketExists()` is checked before every
+    `putObject`, throwing if the configured bucket doesn't exist or the settings are incomplete.
+  - Attachment URLs went through a relative-object-key design first —
+    `message_attachments.file_url` storing a key like `chat-attachments/<uuid>.png` with
+    `toAttachmentUrl`/`toAttachmentKey` (`src/common/utils/attachment-url.util.ts`, env-based)
+    converting to/from a full URL at the API boundary, and `POST /v1/attachments/upload`'s response
+    still returning a ready-to-use full URL — then simplified further at explicit request: no
+    subfolder (`putObject`/the stored filename is just `/<randomUUID>.<ext>` directly under the
+    bucket root) and no round-trip conversion at all. `POST /v1/attachments/upload`'s `file_url` is
+    now the bare filename, not a usable URL; `message_attachments.file_url` stores exactly what the
+    client sent back, verbatim. The full, publicly-fetchable URL
+    (`SettingService.getS3PublicUrl()` + the stored filename) is computed only when an attachment
+    is returned *inside a message*: `MessageAttachmentDto` takes a `baseUrl` alongside the raw
+    attachment row and concatenates it in its constructor, threaded down from `MessageResponseDto`
+    → every response-building method in `MessagesService` (each does
+    `const baseUrl = await this.settingService.getS3PublicUrl()` before constructing its DTO(s))
+    and from `ConversationResponseDto`/`ConversationListItemDto` → `ConversationsService` (a
+    `message`/`last_message` embedded in a conversation response needs the same treatment).
+    `getS3PublicUrl()` throwing (setting missing) is not caught anywhere in this path — it
+    propagates straight out of `listMessages`/`listConversations`/etc. `attachment-url.util.ts` is
+    deleted; the join is inlined at each DTO instead of living in a shared util. No migration —
+    `file_url` was already a plain `VarChar(255)`, only what's written into it (and when the full
+    URL gets built) changed.
 - `docs/MOBILE_INTEGRATION.md` §3.5/§4.4 (Calls) updated to match the group-calling work above:
   fixed the REST paths (`/v1/call/...` → `/v1/calls/...`, wrong since the doc was first written),
   documented `call:invite`'s `participant_user_ids`, `call:answer`'s new required `target_user_id`,
