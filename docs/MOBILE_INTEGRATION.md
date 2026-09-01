@@ -11,7 +11,13 @@ For the day-to-day "what's done, what's open" project view, see
 [`TASKS.md`](../TASKS.md). For a chronological history of changes, see
 [`CHANGELOG.md`](../CHANGELOG.md). This document is neither of those — it's
 a stable reference for a client engineer integrating against the API as it
-exists right now.
+exists right now. For calling specifically — presence semantics, whether
+calls work across different networks, the mobile call flow, and the QA
+plan — see [`CALL_INTEGRATION_FLOW.md`](./CALL_INTEGRATION_FLOW.md) and
+[`QA_CALL_TEST_PLAN.md`](./QA_CALL_TEST_PLAN.md). For Flutter-specific
+walkthroughs with runnable Dart — presence (online/offline) in
+[`FLUTTER_INTEGRATION.md`](./FLUTTER_INTEGRATION.md), calls in
+[`FLUTTER_CALL_INTEGRATION.md`](./FLUTTER_CALL_INTEGRATION.md).
 
 ## Table of contents
 
@@ -437,6 +443,7 @@ Messenger behaves). Only the blocker is notified over WS
 |---|---|---|
 | `GET` | `/v1/calls/conversations/:hash` | Call history for one conversation, newest first. |
 | `GET` | `/v1/calls/active` | This user's ringing/active calls across **every** conversation. |
+| `GET` | `/v1/calls/turn-credentials` | Short-lived STUN/TURN `iceServers` config for your `RTCPeerConnection`. |
 
 Starting/answering/ending a call itself is **WS-only** — see
 [§4.4](#44-call-signaling-events). These REST endpoints are read-only.
@@ -463,6 +470,36 @@ where a `call:invite`/`call:answer`/etc. socket push may have been missed
 entirely because no socket was open yet (app cold start, was backgrounded,
 was terminated, or a reconnect gap). It's scoped to the caller: you only
 ever see calls you're a live participant in, never anyone else's.
+
+#### `GET /v1/calls/turn-credentials`
+
+Short-lived STUN/TURN credentials to configure your `RTCPeerConnection`'s
+`iceServers` with — this is what makes calling across different networks
+(NAT, symmetric NAT, restrictive firewalls) actually work; see
+[`CALL_INTEGRATION_FLOW.md`](./CALL_INTEGRATION_FLOW.md) §2 for the full
+explanation of why STUN alone isn't always enough.
+
+**Response** `200`:
+```json
+{
+  "iceServers": [
+    { "urls": "stun:turn.example.com:3478" },
+    {
+      "urls": "turn:turn.example.com:3478",
+      "username": "1735689600:customer_1",
+      "credential": "base64-hmac..."
+    }
+  ]
+}
+```
+Pass the whole `iceServers` array straight into
+`new RTCPeerConnection({ iceServers })`. `stun:` entries carry no
+credentials; `turn:`/`turns:` entries carry a `username`/`credential` pair
+valid only until the expiry embedded in `username` (an hour by default) —
+fetch a fresh set again before starting a new call rather than caching one
+indefinitely. `500` if this deployment has no TURN server configured
+(`InternalServerErrorException` — a deployment/ops gap, not something your
+client can recover from; fall back to STUN-only or surface a clear error).
 
 ### 3.6 Attachments
 
@@ -550,6 +587,7 @@ conversation's room to stay live — see [§5](#5-client-integration-patterns).
 
 | Event | Direction | Payload |
 |---|---|---|
+| `presence:list` | S→C only | `{ user_id, online, last_seen_at }[]` |
 | `presence:online` | S→C only | `{ user_id }` |
 | `presence:offline` | S→C only | `{ user_id, last_seen_at }` |
 
@@ -558,6 +596,18 @@ Sent to everyone you share at least one active conversation with (your
 multiple connections** — presence only flips online on the *first* socket
 connecting and offline on the *last* one disconnecting, so a user with two
 tabs/devices open doesn't flicker offline when they close one.
+
+`presence:online`/`presence:offline` are edge-triggered — you only get one
+when a contact's status *changes* while your socket is connected. That's not
+enough to render initial online/offline state for your conversation list: if
+a contact was already online before you connected, you'd never otherwise
+find out. `presence:list` closes that gap — it's a one-shot snapshot pushed
+to your socket right after it authenticates (not requested, no ack needed),
+covering every current contact's status at that instant. Seed your local
+presence map from it on `connect`, then keep it live with
+`presence:online`/`presence:offline` for the rest of the connection —
+including across reconnects, since a fresh `presence:list` arrives on every
+successful (re)connection, same as [§5.7](#57-reconnect-sync).
 
 ### 4.4 Call signaling events
 

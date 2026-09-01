@@ -1177,3 +1177,65 @@ pass after Phase 1; `eslint --fix` applied to the touched files (formatting
 only — the remaining `no-unsafe-*` warnings are a pre-existing codebase
 pattern from `req: any` on every controller method, not something this
 change introduced).
+
+---
+
+### Phase 9 — TURN credentials API (2026-08-31) — ✅ done
+
+Prompted by a backend/mobile call-QA task list that assumed this service
+already issues temporary TURN credentials (`docs/QA_CALL_TEST_PLAN.md` §8
+had flagged this as **not built**, with the option to implement it now
+instead of just documenting the gap — this is that implementation).
+
+- **`GET /v1/calls/turn-credentials`** (`calls.controller.ts`) — same
+  `OauthJwtGuard`-protected pattern as `/v1/calls/active`. Returns
+  `{ iceServers: [...] }`, ready to drop straight into a client's
+  `RTCPeerConnection({ iceServers })` config.
+- **`SettingService.getTurnSettings()`** — reads `turn_secret`, `turn_urls`
+  (comma-separated ICE server URLs), and optional
+  `turn_credential_ttl_seconds` (default 3600) from the `settings` table —
+  same "DB-configured, not env-configured" convention as `getS3Settings`,
+  since this is shared deployment-wide infrastructure, not a per-
+  `oauth_client` setting. Throws `InternalServerErrorException` (bilingual,
+  matching `getSecret()`/`getS3PublicUrl()`'s existing pattern) if
+  `turn_secret`/`turn_urls` aren't configured for this deployment — no
+  migration needed, `settings` is already a generic key-value table; an
+  operator seeds these three rows directly when a TURN server (e.g.
+  `coturn`) is deployed.
+- **`CallsService.getTurnCredentials(userId)`** — coturn's `use-auth-secret`
+  REST API convention: `username` is `"<expiry-unix-ts>:<userId>"`,
+  `credential` is `HMAC-SHA1(secret, username)` base64-encoded. Nothing is
+  persisted or explicitly revoked — the embedded expiry alone is what makes
+  a credential "temporary" (a TURN server configured with the same secret
+  independently derives and checks it). `stun:` entries in `turn_urls` are
+  returned without credentials (STUN needs none); `turn:`/`turns:` entries
+  all get the *same* username/credential pair for one request — one
+  coherent credential set per call to the endpoint, not per-server.
+- New DTOs: `IceServerDto`, `TurnCredentialsResponseDto` (`calls.model.ts`).
+
+**What this does NOT include, on purpose**: no actual TURN server is
+deployed by this change — that's infrastructure outside this repo's scope.
+This endpoint is inert (throws the "not configured" error) until an
+operator (1) stands up a TURN server with a `static-auth-secret` and (2)
+inserts matching `turn_secret`/`turn_urls` rows into `settings`.
+
+**QA**: `src/modules/calls/calls.service.spec.ts` (new) and an addition to
+`src/core/services/setting/setting.service.spec.ts` — both run under the
+already-working root `npm test` config (no DB, no e2e harness needed).
+Cover: stun: entries carry no credentials, turn:/turns: entries carry a
+credential independently recomputed and compared byte-for-byte in the
+test (not just "is defined"), all turn: entries in one response share the
+same username/credential (one coherent set, not per-server), the expiry
+embedded in `username` matches `now + ttlSeconds`, `turn_urls` parsing
+trims/filters correctly and defaults the TTL to 3600 when unset, and the
+missing-config path throws rather than silently returning a partial
+result. `npm test` (9/9), `npx tsc --noEmit`, and `npx nest build` all
+pass clean. No e2e/live-endpoint verification was done — the e2e harness
+in this repo is not currently runnable (see `docs/QA_CALL_TEST_PLAN.md`'s
+"On automated regression testing" note) and there's no real TURN server
+available to test actual connectivity against regardless; that's
+`docs/QA_CALL_TEST_PLAN.md` §12's manual QA territory once a TURN server
+exists.
+
+Docs updated to match: `docs/QA_CALL_TEST_PLAN.md` §8/§13/§16,
+`docs/CALL_INTEGRATION_FLOW.md` §2/§4, `docs/MOBILE_INTEGRATION.md` §3.5.

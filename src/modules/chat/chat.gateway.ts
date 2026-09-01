@@ -112,6 +112,7 @@ export class ChatGateway
       client.data.user = user;
       await client.join(userRoom(user.id));
       await this.markOnline(user.id);
+      await this.sendPresenceSnapshot(client, user.id);
     } catch (error) {
       this.logger.warn(
         `WS authentication failed: ${error instanceof Error ? error.message : error}`,
@@ -197,6 +198,38 @@ export class ChatGateway
       user_id: userId,
       ...(lastSeenAt !== undefined ? { last_seen_at: lastSeenAt } : {}),
     });
+  }
+
+  private async sendPresenceSnapshot(
+    client: AuthenticatedSocket,
+    userId: string,
+  ): Promise<void> {
+    try {
+      const contactIds =
+        await this.conversationsService.listContactUserIds(userId);
+      if (contactIds.length === 0) return;
+
+      const contacts = await this.prismaService.users.findMany({
+        where: { id: { in: contactIds } },
+        select: { id: true, last_seen_at: true },
+      });
+
+      client.emit(
+        'presence:list',
+        contacts.map((contact) => {
+          const online = this.onlineSocketCounts.has(contact.id);
+          return {
+            user_id: contact.id,
+            online,
+            last_seen_at: online ? null : contact.last_seen_at,
+          };
+        }),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send presence snapshot to ${userId}: ${error instanceof Error ? error.message : error}`,
+      );
+    }
   }
 
   @SubscribeMessage('conversation:join')
