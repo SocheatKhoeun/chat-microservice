@@ -323,6 +323,31 @@ export class CallsService {
     );
   }
 
+  async relayMediaState(
+    currentUserId: string,
+    callHash: string,
+    videoEnabled: boolean,
+    audioEnabled: boolean,
+  ): Promise<void> {
+    const call = await this.getCallForParticipant(currentUserId, callHash);
+    const otherParticipantIds = call.participants
+      .map((p) => p.user_id)
+      .filter((id) => id !== currentUserId);
+
+    this.chatEventsService.safeBroadcast(() =>
+      this.chatEventsService.notifyUsers(
+        otherParticipantIds,
+        'call:media-state',
+        {
+          call_hash: callHash,
+          user_id: currentUserId,
+          video_enabled: videoEnabled,
+          audio_enabled: audioEnabled,
+        },
+      ),
+    );
+  }
+
   async endCall(
     currentUserId: string,
     callHash: string,

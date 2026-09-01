@@ -289,7 +289,103 @@ void _onParticipantJoined(dynamic data) {
 }
 ```
 
-## 7. Ending a call
+## 7. In-call controls: camera on/off, mute, switch camera
+
+Only camera-off and mic-mute are relayed to the other participant — the
+server has a dedicated `call:media-state` event for exactly that (fanned out
+to everyone else in the call, same as `call:participant-joined`, not
+targeted at one peer like `call:ice-candidate`). **Switching front/back
+camera never touches the server at all** — it's a local device swap that
+replaces the outgoing video track on your existing peer connections; the
+remote side just keeps receiving frames on the same track, no signaling
+needed.
+
+Add to `CallManager`:
+
+```dart
+bool videoEnabled = true;
+bool audioEnabled = true;
+final Map<String, bool> remoteVideoEnabled = {}; // per-user_id, from call:media-state
+final Map<String, bool> remoteAudioEnabled = {};
+
+CallManager(this._socket, this._fetchIceServers) {
+  _socket.on('call:invite', _onInvite);
+  _socket.on('call:participant-joined', _onParticipantJoined);
+  _socket.on('call:answer', _onRemoteSignal);
+  _socket.on('call:ice-candidate', _onRemoteSignal);
+  _socket.on('call:media-state', _onRemoteMediaState);   // new
+  _socket.on('call:reject', _onReject);
+  _socket.on('call:end', _onEnd);
+}
+```
+
+### 🎥 Turn camera on/off
+
+```dart
+Future<void> toggleVideo() async {
+  videoEnabled = !videoEnabled;
+  localStream?.getVideoTracks().forEach((t) => t.enabled = videoEnabled);
+  await _emitWithAck('call:media-state', {
+    'call_hash': callHash,
+    'video_enabled': videoEnabled,
+    'audio_enabled': audioEnabled,
+  });
+  notifyListeners();
+}
+```
+
+### 🎤 Mute/unmute microphone
+
+```dart
+Future<void> toggleAudio() async {
+  audioEnabled = !audioEnabled;
+  localStream?.getAudioTracks().forEach((t) => t.enabled = audioEnabled);
+  await _emitWithAck('call:media-state', {
+    'call_hash': callHash,
+    'video_enabled': videoEnabled,
+    'audio_enabled': audioEnabled,
+  });
+  notifyListeners();
+}
+```
+
+Both send the **full current state**, not a delta — the server holds no
+media state of its own, it's a pure relay, so each event has to be
+self-contained.
+
+### 🔄 Switch front/back camera
+
+Purely local — `flutter_webrtc`'s `Helper.switchCamera` swaps the capture
+device on the existing video track without renegotiating anything:
+
+```dart
+Future<void> switchCamera() async {
+  final videoTrack = localStream?.getVideoTracks().firstOrNull;
+  if (videoTrack != null) await Helper.switchCamera(videoTrack);
+}
+```
+
+No event, no `notifyListeners()` needed for the remote side — they keep
+receiving the same track, just from whichever lens is now active.
+
+### Receiving the other participant's camera/mic state
+
+```dart
+void _onRemoteMediaState(dynamic data) {
+  final userId = data['user_id'] as String;
+  remoteVideoEnabled[userId] = data['video_enabled'] as bool;
+  remoteAudioEnabled[userId] = data['audio_enabled'] as bool;
+  notifyListeners(); // swap that tile to an avatar/mic-muted icon instead of a frozen frame
+}
+```
+
+Without this, a peer disabling their camera just freezes on the last frame
+on your screen — `RTCPeerConnection`'s own `track.onmute` fires on
+network-level RTP gaps, not on the remote side's local `enabled` flag, so
+there's no free signal here. `call:media-state` is what makes "camera off"
+render as a deliberate state instead of looking like a stalled connection.
+
+## 8. Ending a call
 
 ```dart
 Future<void> endCall() async {
@@ -327,7 +423,7 @@ network change even while the socket stays up — that's an ICE-level
 reconnect, unrelated to the signaling socket, and entirely your WebRTC
 stack's concern.
 
-## 8. Group calls
+## 9. Group calls
 
 Everything above already generalizes — a call can have more than two
 participants. The only change is UI and peer bookkeeping:

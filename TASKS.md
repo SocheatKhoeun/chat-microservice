@@ -1239,3 +1239,71 @@ exists.
 
 Docs updated to match: `docs/QA_CALL_TEST_PLAN.md` §8/§13/§16,
 `docs/CALL_INTEGRATION_FLOW.md` §2/§4, `docs/MOBILE_INTEGRATION.md` §3.5.
+
+---
+
+### Phase 10 — Remaining call-feature gaps (2026-09-01)
+
+Consolidated from `docs/CALL_INTEGRATION_FLOW.md` §4, `docs/QA_CALL_TEST_PLAN.md`
+§13/§16, and a mid-call-signaling question raised during integration work.
+Everything below is currently **not built** — call functionality works
+end-to-end without it, these are the known gaps against a "full call
+feature."
+
+- [x] **`call:media-state` signaling (camera/mic toggle)** — ✅ done
+  (2026-09-01). New `@SubscribeMessage('call:media-state')` in
+  `ChatGateway`, new `CallMediaStateDto` (`chat.model.ts`) — `call_hash`,
+  `video_enabled`, `audio_enabled` (both required booleans; the event
+  carries full current state, not a delta, since the server holds no media
+  state of its own). `CallsService.relayMediaState` (no DB write, transient
+  only) fans it out to every *other* joined participant via
+  `ChatEventsService.notifyUsers`, same pattern as `call:participant-joined`
+  — deliberately a fan-out, unlike `call:ice-candidate`'s single-target
+  relay, since every tile in the call needs to know, not just one peer
+  connection. Client still flips the track's `enabled` flag locally *and*
+  emits this event; the remote side swaps in a "camera off"/"muted"
+  indicator instead of showing a frozen frame (which is what happens with
+  no signal at all, since `track.onmute` fires on network-level RTP gaps,
+  not on the remote side's local `enabled` flag). Switching front/back
+  camera deliberately gets **no** event — it's a local capture-device swap
+  on the existing track, the remote side keeps receiving the same track
+  unchanged. Docs updated: `docs/FLUTTER_CALL_INTEGRATION.md` §7 (Dart code
+  for all three controls), `docs/CALL_INTEGRATION_FLOW.md` §3.3.
+  **Verification**: `npx tsc --noEmit -p tsconfig.build.json`, `eslint --fix`,
+  and `npm test` (9/9) all pass clean. No live Socket.IO integration test run
+  this time (same constraint as noted in `docs/QA_CALL_TEST_PLAN.md`'s "On
+  automated regression testing" note) — the new handler follows the
+  existing `call:ice-candidate` handler's exact validated-DTO →
+  service-method → ack shape, which *was* integration-tested in Phase 4.
+- [ ] **Push notification (FCM/APNs) for an incoming call when the app has
+  no live socket** — full design already scoped under Phase 6 above (was
+  started and deliberately reverted before any migration landed); calling
+  needs it more acutely than messages do, since a ringing call with no push
+  is invisible until the callee's next foreground/launch (`GET
+  /v1/calls/active`). No new design needed here — same
+  `device_tokens`/`PushService` work unblocks both messages and calls.
+- [ ] **Server-side ring timeout / auto-missed-call** — a `call:invite`
+  nobody answers or rejects stays `status: ringing` forever; there's no
+  server-side expiry that flips it to `missed` and broadcasts `call:end`.
+  Every mobile client currently has to reimplement its own "no answer after
+  N seconds" timer client-side, inconsistently. Fix: a scheduled sweep (or a
+  per-call timeout job set on `call:invite`) in `CallsService` that reuses
+  the same close-out path as `endStaleCallsForUser`
+  (`calls.service.ts:404-415`) once a configurable ring TTL elapses.
+- [ ] **SFU / media server for large group calls** — current group calls are
+  mesh WebRTC only (every client uploads N-1 streams; see
+  `docs/MOBILE_INTEGRATION.md` §4.4), so the practical participant ceiling is
+  upload bandwidth/CPU on the weakest device, not a request parameter. Fine
+  for small groups; would need an actual SFU (e.g. mediasoup/LiveKit) as a
+  separate service to scale past that — out of scope for this
+  signaling-only backend as currently architected, noted here so it isn't
+  mistaken for an oversight.
+- [ ] **Redis-backed presence for multi-instance deployment** — not
+  call-specific, but directly affects call reachability:
+  `ChatGateway.onlineSocketCounts` (`chat.gateway.ts:74`) is an in-process
+  `Map`, correct only as long as this service runs as a single instance (see
+  `Dockerfile` — no Socket.IO Redis adapter configured today). Scaling to
+  multiple replicas behind a load balancer would make presence ref-counting
+  wrong across instances, which would also make "is this member reachable to
+  ring" unreliable. Not urgent while single-instance; flag before adding a
+  second replica.

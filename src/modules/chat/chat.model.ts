@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDefined,
   IsEnum,
   IsInt,
@@ -109,6 +110,20 @@ export class CallIceCandidateDto {
   // A WebRTC ICE candidate — opaque to the server, just relayed to the target participant.
   @IsDefined()
   signal!: unknown;
+}
+
+export class CallMediaStateDto {
+  @IsString()
+  @IsNotEmpty()
+  call_hash!: string;
+
+  // Full current state, not a delta — the server holds no media state of its
+  // own, it just relays whatever the client currently has enabled.
+  @IsBoolean()
+  video_enabled!: boolean;
+
+  @IsBoolean()
+  audio_enabled!: boolean;
 }
 
 export class ListMessagesWsDto {
