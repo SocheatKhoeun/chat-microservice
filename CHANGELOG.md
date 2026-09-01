@@ -293,6 +293,50 @@
   `hash`, unread-count bookkeeping, `since_id` reconnect-sync loop, multi-device/ref-counted
   presence), the bilingual (`en||km`) error format, and end-to-end example flows. Distinct from
   `TASKS.md`/`CHANGELOG.md` — a stable client-facing reference, not a project/history log.
+- `GET /v1/calls/turn-credentials` — short-lived STUN/TURN `iceServers` config for a client's
+  `RTCPeerConnection`, following coturn's `use-auth-secret` REST convention: `username` is
+  `"<expiry-unix-ts>:<userId>"`, `credential` is `HMAC-SHA1(turn_secret, username)`
+  base64-encoded. `SettingService#getTurnSettings()` reads `turn_secret`/`turn_urls`/optional
+  `turn_credential_ttl_seconds` (default 3600) from the `settings` table (deployment-wide, not
+  per-`oauth_client` — same convention as `getS3Settings`) and throws a bilingual
+  `InternalServerErrorException` if unconfigured — the endpoint is inert until an operator deploys
+  a TURN server and seeds those rows. `stun:` entries in the response carry no credentials;
+  `turn:`/`turns:` entries all share one username/credential pair per request, not one each. New
+  `CallsService#getTurnCredentials`, `IceServerDto`/`TurnCredentialsResponseDto`
+  (`calls.model.ts`). No migration (`settings` is already a generic key-value table). Covered by
+  `calls.service.spec.ts` (new) and an addition to `setting.service.spec.ts` — see `TASKS.md`
+  Phase 9 for the full write-up.
+- `presence:list` (WS, S→C only) — a one-shot snapshot of `{ user_id, online, last_seen_at }[]`
+  for the caller's contacts, pushed right after every successful socket authentication (including
+  reconnects). Closes a real gap: `presence:online`/`presence:offline` only fire on a *change*, so
+  a client opening its conversation list had no way to know who was already online before it
+  connected. `ChatGateway#sendPresenceSnapshot` builds it from the same in-memory
+  `onlineSocketCounts` ref-count presence already uses, plus one `users.findMany` for
+  `last_seen_at`; `last_seen_at` is forced `null` for anyone currently online (same "null means
+  never-tracked-or-online" rule `GroupMemberDto`/`presence:offline` already follow) rather than
+  leaking the DB column's last-known-offline timestamp for someone who's online right now.
+  `chat-test.html` updated to match: a `presence` map seeded from `presence:list` and kept live by
+  `presence:online`/`presence:offline`, with `renderMembers()` now reading live status instead of
+  the one-time REST snapshot it previously trusted indefinitely.
+- `docs/CALL_INTEGRATION_FLOW.md` — calling-specific integration reference distinct from
+  `MOBILE_INTEGRATION.md`'s wire-level reference: precisely what "online" means for calling
+  purposes, whether/how a call connects across different networks (this server is a pure signaling
+  relay — media is peer-to-peer, NAT traversal is the client's job, TURN credentials above are
+  this server's one contribution), the outgoing/incoming/end-call mobile flow, and what happens
+  when a participant's network drops mid-call. Companion `docs/QA_CALL_TEST_PLAN.md` — the formal,
+  section-by-section QA plan for the call feature (test environment, REST/WS/WebRTC signaling test
+  cases, the TURN credential API above, authorization/security, DB QA, the manual multi-device/
+  multi-network test cases that can't be automated, and mobile (Flutter) acceptance criteria).
+- `docs/FLUTTER_INTEGRATION.md` — Flutter-specific presence walkthrough: `socket_io_client` setup,
+  a `PresenceService` (`ChangeNotifier`) wired to `presence:list`/`presence:online`/
+  `presence:offline`, and a `PresenceDot` widget wired into a conversation-list tile.
+- `docs/FLUTTER_CALL_INTEGRATION.md` — Flutter-specific call walkthrough: `flutter_webrtc` setup
+  and platform permissions, fetching TURN credentials, a global `CallManager` (per
+  `MOBILE_INTEGRATION.md` §5.9's "call state is global, not screen-local" pattern) hydrated from
+  `GET /v1/calls/active` on cold start, placing/answering calls, the offer/answer/ICE-candidate
+  exchange (including that `call:ice-candidate` carries both the initial SDP offer and every ICE
+  candidate after it, disambiguated only by payload shape — not obvious from the wire reference
+  alone), owner-vs-participant `call:end` handling, and the mesh offer topology for group calls.
 
 ### Changed
 - **`users.id` is now the external id itself** (`String @id @db.VarChar(255)`) — the separate
@@ -411,6 +455,11 @@
   the new `call:participant-joined` event, the owner-vs-participant `call:end` distinction, and the
   mesh connection rule (who offers to whom) a real client needs to implement group calls correctly.
   §3.1 (Profile) deliberately left untouched.
+- `docs/MOBILE_INTEGRATION.md` updated to match the Added entries above: §3.5 documents
+  `GET /v1/calls/turn-credentials`'s response shape and its `500` "not configured for this
+  deployment" case; §4.3 documents `presence:list` and why it's needed alongside the existing
+  edge-triggered presence events; the intro now links to `CALL_INTEGRATION_FLOW.md`,
+  `QA_CALL_TEST_PLAN.md`, `FLUTTER_INTEGRATION.md`, and `FLUTTER_CALL_INTEGRATION.md`.
 
 ### Removed
 - `ws-test.js` and `ws-client.js` (root-level Node CLI testers for the WebSocket API — one

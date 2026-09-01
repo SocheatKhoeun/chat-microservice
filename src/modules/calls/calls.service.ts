@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -5,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../core/services/prisma/prisma.service';
+import { SettingService } from '../../core/services/setting/setting.service';
 import { ChatEventsService } from '../../common/services/chat-events/chat-events.service';
 import { generateHash } from '../../common/utils/generate-hash.util';
 import {
@@ -16,7 +18,9 @@ import { ConversationsService } from '../conversations/conversations.service';
 import {
   CallListResponseDto,
   CallResponseDto,
+  IceServerDto,
   ListCallsQueryDto,
+  TurnCredentialsResponseDto,
 } from './calls.model';
 
 const callInclude = { participants: true } as const;
@@ -38,7 +42,30 @@ export class CallsService {
     private readonly prismaService: PrismaService,
     private readonly conversationsService: ConversationsService,
     private readonly chatEventsService: ChatEventsService,
+    private readonly settingService: SettingService,
   ) {}
+
+  async getTurnCredentials(
+    userId: string,
+  ): Promise<TurnCredentialsResponseDto> {
+    const { secret, urls, ttlSeconds } =
+      await this.settingService.getTurnSettings();
+
+    const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const username = `${expiresAt}:${userId}`;
+    const credential = createHmac('sha1', secret)
+      .update(username)
+      .digest('base64');
+
+    const iceServers = urls.map(
+      (url) =>
+        url.startsWith('turn:') || url.startsWith('turns:')
+          ? new IceServerDto({ urls: url, username, credential })
+          : new IceServerDto({ urls: url }), // stun: needs no credentials
+    );
+
+    return new TurnCredentialsResponseDto(iceServers);
+  }
 
   async listCalls(
     currentUserId: string,
@@ -366,10 +393,11 @@ export class CallsService {
   }
 
   async endStaleCallsForUser(userId: string): Promise<void> {
-    const staleParticipations = await this.prismaService.call_participants.findMany({
-      where: liveParticipationWhere(userId),
-      include: { call: true },
-    });
+    const staleParticipations =
+      await this.prismaService.call_participants.findMany({
+        where: liveParticipationWhere(userId),
+        include: { call: true },
+      });
 
     for (const participation of staleParticipations) {
       if (!participation.call.hash) continue; // shouldn't happen — always set on creation

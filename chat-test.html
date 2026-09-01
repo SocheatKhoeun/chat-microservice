@@ -614,6 +614,14 @@
       this.messages = new Map();
       this.pendingAttachments = [];
 
+      // user_id -> { online, last_seen_at }. Seeded from the presence:list
+      // snapshot on connect, kept live by presence:online/offline after that.
+      // renderMembers() reads from this instead of trusting the REST
+      // response's last_seen_at forever, so a member list stays accurate
+      // after someone's status changes instead of showing a stale timestamp.
+      this.presence = new Map();
+      this.lastMembers = null;
+
       this.$ = (sel) => root.querySelector(sel);
       this.statusDot = this.$('.status-dot');
       this.statusText = this.$('.status-text');
@@ -934,17 +942,33 @@
         this.system(`🔧 ${e.user_id} role → ${e.role}`);
       });
 
+      // One-shot snapshot pushed right after this socket authenticates —
+      // covers every contact's *current* status, not just future changes.
+      this.socket.on('presence:list', (list) => {
+        this.log('presence:list ← ' + JSON.stringify(list), 'good');
+        for (const p of list) {
+          this.presence.set(p.user_id, { online: p.online, last_seen_at: p.last_seen_at });
+        }
+        const onlineCount = list.filter((p) => p.online).length;
+        this.system(`📋 presence snapshot: ${onlineCount}/${list.length} contacts online`);
+        this.refreshMemberPresence();
+      });
+
       // Fires for anyone this pane shares a conversation with — not scoped
       // to whichever conversation is currently joined.
       this.socket.on('presence:online', (p) => {
         this.log('presence:online ← ' + JSON.stringify(p), 'good');
         this.system(`🟢 ${p.user_id} is online`);
+        this.presence.set(p.user_id, { online: true, last_seen_at: this.presence.get(p.user_id)?.last_seen_at ?? null });
+        this.refreshMemberPresence();
       });
 
       this.socket.on('presence:offline', (p) => {
         this.log('presence:offline ← ' + JSON.stringify(p));
         const lastSeen = p.last_seen_at ? ` (last seen ${new Date(p.last_seen_at).toLocaleTimeString()})` : '';
         this.system(`⚫ ${p.user_id} went offline${lastSeen}`);
+        this.presence.set(p.user_id, { online: false, last_seen_at: p.last_seen_at ?? null });
+        this.refreshMemberPresence();
       });
 
       // --- calls (voice/video signaling) ---
@@ -1715,13 +1739,29 @@
     }
 
     renderMembers(members) {
+      this.lastMembers = members;
       const el = this.$('.members-list');
       el.innerHTML = (members && members.length)
         ? members.map((m) => {
-            const lastSeen = m.last_seen_at ? `last seen ${new Date(m.last_seen_at).toLocaleTimeString()}` : 'last seen unknown';
-            return `<div class="member-row"><span>${escapeHtml(m.user_id)} <span class="muted">(${lastSeen})</span></span><b>${escapeHtml(m.role || 'member')}</b></div>`;
+            // Prefer live presence (from presence:list/online/offline) over the
+            // REST snapshot's last_seen_at, which goes stale the moment someone's
+            // status changes after the /members fetch.
+            const presence = this.presence.get(m.user_id);
+            const isOnline = presence ? presence.online : false;
+            const lastSeenAt = presence ? presence.last_seen_at : m.last_seen_at;
+            const dot = isOnline ? '🟢' : '⚫';
+            const status = isOnline
+              ? 'online'
+              : (lastSeenAt ? `last seen ${new Date(lastSeenAt).toLocaleTimeString()}` : 'last seen unknown');
+            return `<div class="member-row"><span>${dot} ${escapeHtml(m.user_id)} <span class="muted">(${status})</span></span><b>${escapeHtml(m.role || 'member')}</b></div>`;
           }).join('')
         : '<div class="muted">No members loaded.</div>';
+    }
+
+    // Re-paint the currently-loaded member list after a presence update,
+    // without re-fetching /members.
+    refreshMemberPresence() {
+      if (this.lastMembers) this.renderMembers(this.lastMembers);
     }
 
     async addMember() {

@@ -141,6 +141,44 @@ export class CallResponseDto implements Pick<
   }
 }
 
+export class IceServerDto {
+  @ApiProperty({
+    description:
+      'A STUN or TURN server URL, e.g. "stun:turn.example.com:3478".',
+  })
+  urls: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Present only on turn:/turns: entries — a short-lived username valid until it expires (embeds the expiry timestamp; see the credential field).',
+  })
+  username?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Present only on turn:/turns: entries — the HMAC credential paired with `username`, valid only until the embedded expiry.',
+  })
+  credential?: string;
+
+  constructor(input: { urls: string; username?: string; credential?: string }) {
+    this.urls = input.urls;
+    if (input.username !== undefined) this.username = input.username;
+    if (input.credential !== undefined) this.credential = input.credential;
+  }
+}
+
+export class TurnCredentialsResponseDto {
+  @ApiProperty({
+    type: [IceServerDto],
+    description: 'STUN/TURN server entries to configure client-side RTCPeerConnection ICE servers.',
+  })
+  iceServers: IceServerDto[];
+
+  constructor(iceServers: IceServerDto[]) {
+    this.iceServers = iceServers;
+  }
+}
+
 export class ListCallsQueryDto {
   @ApiPropertyOptional({
     description:

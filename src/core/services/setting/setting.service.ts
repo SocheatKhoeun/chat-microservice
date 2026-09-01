@@ -42,14 +42,16 @@ export class SettingService {
               's3_secret_key',
               's3_bucket_name',
               's3_port',
-              's3_use_ssl'
+              's3_use_ssl',
             ],
           },
         },
       });
 
       if (!settings || settings.length === 0) {
-        throw new InternalServerErrorException('S3 settings not found in database');
+        throw new InternalServerErrorException(
+          'S3 settings not found in database',
+        );
       }
 
       const settingsMap: Record<string, string> = {};
@@ -64,13 +66,48 @@ export class SettingService {
         s3AccessKey: settingsMap['s3_access_key'],
         s3SecretKey: settingsMap['s3_secret_key'],
         s3BucketName: settingsMap['s3_bucket_name'],
-        s3Port: settingsMap['s3_port'] ? parseInt(settingsMap['s3_port']) : 9000,
+        s3Port: settingsMap['s3_port']
+          ? parseInt(settingsMap['s3_port'])
+          : 9000,
         s3UseSsl: settingsMap['s3_use_ssl'] === 'true',
       };
     } catch (err) {
       console.error('Error fetching S3 settings:', err);
       throw new InternalServerErrorException('Failed to fetch S3 settings');
     }
+  }
+
+  async getTurnSettings() {
+    const settings = await this.prismaService.settings.findMany({
+      where: {
+        key: {
+          in: ['turn_secret', 'turn_urls', 'turn_credential_ttl_seconds'],
+        },
+      },
+    });
+
+    const settingsMap: Record<string, string> = {};
+    settings.forEach((setting) => {
+      if (setting.key && setting.value)
+        settingsMap[setting.key] = setting.value;
+    });
+
+    if (!settingsMap['turn_secret'] || !settingsMap['turn_urls'])
+      throw new InternalServerErrorException(
+        'No TURN server configured for this deployment!||មិនមានម៉ាស៊ីនមេ TURN កំណត់រចនាសម្ព័ន្ធសម្រាប់ការដាក់ពង្រាយនេះទេ!',
+      );
+
+    const ttlSeconds = Number(settingsMap['turn_credential_ttl_seconds']);
+
+    return {
+      secret: settingsMap['turn_secret'],
+      urls: settingsMap['turn_urls']
+        .split(',')
+        .map((url) => url.trim())
+        .filter(Boolean),
+      ttlSeconds:
+        Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 3600,
+    };
   }
 
   async getS3PublicUrl() {
