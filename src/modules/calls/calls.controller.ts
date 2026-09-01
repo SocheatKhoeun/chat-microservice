@@ -1,13 +1,18 @@
 import { Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiInternalServerErrorResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
 import { OauthJwtGuard } from '../../common/guards/oauth-jwt/oauth-jwt.guard';
-import { CallListResponseDto, ListCallsQueryDto } from './calls.model';
+import {
+  CallListResponseDto,
+  ListCallsQueryDto,
+  TurnCredentialsResponseDto,
+} from './calls.model';
 import { CallsService } from './calls.service';
 
 @ApiTags('Mobile - Calls')
@@ -33,10 +38,24 @@ export class CallsController {
 
   @Get('active')
   @ApiOperation({
-    summary: 'List every ringing/active call this user is still part of, across every conversation.',
+    summary:
+      'List every ringing/active call this user is still part of, across every conversation.',
   })
   @ApiOkResponse({ type: CallListResponseDto })
   listActiveCalls(@Req() req: any) {
     return this.callsService.listActiveCalls(req.user.id);
+  }
+
+  @Get('turn-credentials')
+  @ApiOperation({
+    summary:
+      'Short-lived STUN/TURN server credentials to configure client-side RTCPeerConnection ICE servers with, so calls can traverse NAT/restrictive networks.',
+  })
+  @ApiOkResponse({ type: TurnCredentialsResponseDto })
+  @ApiInternalServerErrorResponse({
+    description: 'No TURN server is configured for this deployment.',
+  })
+  getTurnCredentials(@Req() req: any) {
+    return this.callsService.getTurnCredentials(req.user.id);
   }
 }
