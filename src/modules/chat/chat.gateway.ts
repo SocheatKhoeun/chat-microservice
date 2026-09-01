@@ -31,6 +31,7 @@ import {
   CallActionDto,
   CallIceCandidateDto,
   CallInviteDto,
+  CallMediaStateDto,
   CallSignalDto,
   JoinConversationDto,
   ListMessagesWsDto,
@@ -421,6 +422,23 @@ export class ChatGateway
         dto.call_hash,
         dto.target_user_id,
         dto.signal,
+      );
+      return { call_hash: dto.call_hash };
+    });
+  }
+
+  @SubscribeMessage('call:media-state')
+  async onCallMediaState(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<WsAck<{ call_hash: string }>> {
+    return this.handle(client, async (user) => {
+      const dto = await validateDto(CallMediaStateDto, body);
+      await this.callsService.relayMediaState(
+        user.id,
+        dto.call_hash,
+        dto.video_enabled,
+        dto.audio_enabled,
       );
       return { call_hash: dto.call_hash };
     });

@@ -249,13 +249,32 @@ either side discovers from here on relays through 'call:ice-candidate'
 targeted at the other participant, same channel, no separate setup.
 ```
 
-### 3.3 Ending a call
+### 3.3 In-call controls: camera off / mute
+
+Turning your camera or mic off locally (`track.enabled = false`) is silent
+to the server and to the other participant by default — WebRTC's
+`track.onmute` fires on network-level RTP interruptions, not on the local
+`enabled` flag, so the remote side just sees a frozen last frame with no way
+to tell "camera off" from "connection stalled."
+
+`call:media-state` closes that gap: emit `{ call_hash, video_enabled,
+audio_enabled }` (full current state, not a delta — the server holds none of
+its own) alongside flipping the track locally, and it's relayed to every
+other participant in the call (fan-out, like `call:participant-joined` —
+not targeted at one peer like `call:ice-candidate`). See
+`FLUTTER_CALL_INTEGRATION.md` §7 for the client code.
+
+**Switching front/back camera never goes through this server at all** — it
+swaps the local capture device on the existing outgoing video track; the
+remote side keeps receiving the same track and needs no signal.
+
+### 3.4 Ending a call
 
 Emit `call:end`. Remember the two different outcomes documented in
 `MOBILE_INTEGRATION.md` §4.4: the call's **owner** ending it ends it for
 everyone; anyone else ending it just leaves (the call keeps going for the
 rest while ≥2 participants remain `joined`). Always check the broadcast's
-`status` field before tearing down your whole call UI — see §3.4 below for
+`status` field before tearing down your whole call UI — see §3.5 below for
 the concrete "one participant's connection drops" case, traced in
 `CallsService.endCall` (`calls.service.ts:335-402`).
 
@@ -266,7 +285,7 @@ If you want a "missed call after N seconds of no answer" UX, the timer and
 the resulting `call:end` are your client's responsibility — this server
 does not auto-expire a ringing call. See `QA_CALL_TEST_PLAN.md` TC-CALL-006.
 
-### 3.4 A participant's network drops mid-call
+### 3.5 A participant's network drops mid-call
 
 This is the practical form of "different networks" mobile QA cares about:
 a phone losing wifi and failing over to cellular, or losing signal
