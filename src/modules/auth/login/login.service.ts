@@ -7,6 +7,8 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../../core/services/prisma/prisma.service';
 import { SettingService } from '../../../core/services/setting/setting.service';
 import { generateHash } from '../../../common/utils/generate-hash.util';
+import { isUniqueConstraintViolation } from '../../../common/utils/prisma-error.util';
+import type { users } from '../../../../generated/prisma/client';
 import {
   AccessTokenPayload,
   AccessTokenResponseDto,
@@ -58,17 +60,34 @@ export class LoginService {
       where: { id: dto.user_id },
     });
 
-    if (existing) {
-      if (existing.oauth_client_id !== oauthClientId)
-        throw new ConflictException(
-          'This user_id is already registered under a different client!||user_id នេះត្រូវបានចុះឈ្មោះរួចហើយក្រោមអតិថិជនផ្សេង!',
-        );
+    if (existing) return this.assertOwnedByClient(existing, oauthClientId);
 
-      return existing;
+    let created: users;
+    try {
+      created = await this.prismaService.users.create({
+        data: { id: dto.user_id, oauth_client_id: oauthClientId },
+      });
+    } catch (error) {
+      if (!isUniqueConstraintViolation(error)) throw error;
+
+      // Another concurrent login request created this user_id first.
+      created = await this.prismaService.users.findUniqueOrThrow({
+        where: { id: dto.user_id },
+      });
     }
 
-    return this.prismaService.users.create({
-      data: { id: dto.user_id, oauth_client_id: oauthClientId },
-    });
+    return this.assertOwnedByClient(created, oauthClientId);
+  }
+
+  private assertOwnedByClient<T extends { oauth_client_id: number | null }>(
+    user: T,
+    oauthClientId: number,
+  ): T {
+    if (user.oauth_client_id !== oauthClientId)
+      throw new ConflictException(
+        'This user_id is already registered under a different client!||user_id នេះត្រូវបានចុះឈ្មោះរួចហើយក្រោមអតិថិជនផ្សេង!',
+      );
+
+    return user;
   }
 }
