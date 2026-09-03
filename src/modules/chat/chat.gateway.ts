@@ -133,7 +133,7 @@ export class ChatGateway
     const user = client.data.user;
     if (!user) return;
 
-    this.logger.debug(`user ${user.id} disconnected`);
+    // this.logger.debug(`user ${user.id} disconnected`);
 
     for (const conversationHash of client.data.typingIn ?? []) {
       client.to(conversationRoom(conversationHash)).emit('typing:stop', {
@@ -477,9 +477,9 @@ export class ChatGateway
       if (error instanceof HttpException)
         return { success: false, message: error.message };
 
-      this.logger.error(
-        `WS handler failed: ${error instanceof Error ? (error.stack ?? error.message) : error}`,
-      );
+      // this.logger.error(
+      //   `WS handler failed: ${error instanceof Error ? (error.stack ?? error.message) : error}`,
+      // );
       return { success: false, message: 'Something went wrong!' };
     }
   }
