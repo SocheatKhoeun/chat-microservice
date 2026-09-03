@@ -115,6 +115,7 @@ model conversation_members {
   user         users         @relation(fields: [user_id], references: [id])
 
   @@unique([conversation_id, user_id])
+  @@index([user_id, is_archived, left_at, is_pinned, conversation_id])
   @@map("conversation_members")
 }
 
@@ -146,6 +147,7 @@ model messages {
   deliveries      message_deliveries[]
   attachments     message_attachments[]
 
+  @@index([conversation_id, id])
   @@map("messages")
 }
 
